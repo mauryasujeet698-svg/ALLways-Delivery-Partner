@@ -276,7 +276,7 @@ class DeliveryMap extends StatelessWidget{
       final markers=<Marker>[if(position!=null)Marker(point:center,width:54,height:54,child:const Pin(color:blue,icon:Icons.local_shipping)),if(lat!=0&&lng!=0)Marker(point:LatLng(lat,lng),width:54,height:54,child:const Pin(color:Colors.red,icon:Icons.location_on))];
       return Stack(children:[
         FlutterMap(options:MapOptions(initialCenter:center,initialZoom:15),children:[TileLayer(urlTemplate:'https://tile.openstreetmap.org/{z}/{x}/{y}.png',maxZoom:19,userAgentPackageName:'com.allways.delivery'),MarkerLayer(markers:markers)]),
-        Positioned(top:14,left:14,right:14,child:SafeArea(bottom:false,child:Card(child:Padding(padding:const EdgeInsets.all(13),child:Row(children:[const Icon(Icons.location_searching,color:blue),const SizedBox(width:9),Expanded(child:Text(chosen==null?'Live delivery map':'Tracking order #'+chosen!.id,style:const TextStyle(fontWeight:FontWeight.w800)))]))))),
+        Positioned(top:14,left:14,right:14,child:SafeArea(bottom:false,child:Card(child:Padding(padding:const EdgeInsets.all(13),child:Row(children:[const Icon(Icons.location_searching,color:blue),const SizedBox(width:9),Expanded(child:Text(chosen==null?'Live delivery map':'Tracking order #'+chosen.id,style:const TextStyle(fontWeight:FontWeight.w800)))]))))),
       ]);
     },
   );
