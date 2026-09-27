@@ -25,13 +25,11 @@ jobs:
           p=Path("android/app/build.gradle.kts")
           s=p.read_text()
           s=s.replace('plugins {', 'plugins {\n  id("com.google.gms.google-services")', 1)
-          s=s.replace('namespace = "com.example.delivery_partner"', 'namespace = "com.allways.delivery"')
-          s=s.replace('applicationId = "com.example.delivery_partner"', 'applicationId = "com.allways.delivery"')
+          s=s.replace('namespace = "com.allways.delivery"', 'namespace = "com.allways.delivery"')
+          s=s.replace('applicationId = "com.allways.delivery"', 'applicationId = "com.allways.delivery"')
           if 'namespace = "com.allways.delivery"' not in s:
             s=s.replace('android {', 'android {\n    namespace = "com.allways.delivery"', 1)
-          if 'applicationId = "com.allways.delivery"' not in s:
-            s=s.replace('applicationId = "com.example.delivery_partner"', 'applicationId = "com.allways.delivery"')
-          p.write_text(s)
+                    p.write_text(s)
           PY
           mkdir -p android/app/src/main
           cat > android/app/src/main/AndroidManifest.xml <<'EOF'
