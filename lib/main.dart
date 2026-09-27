@@ -41,27 +41,19 @@ class AllwaysDeliveryApp extends StatelessWidget {
   );
 }
 
-class AuthGate extends StatelessWidget {
-  const AuthGate({super.key});
-  Future<bool> _allowed(User u) async {
-    final c=await FirebaseFirestore.instance.collection('customers').doc(u.uid).get();
-    if((c.data()?['role']??'').toString().toLowerCase()=='delivery_partner') return true;
-    return (await FirebaseFirestore.instance.collection('deliveryPartners').doc(u.uid).get()).exists;
-  }
-  @override Widget build(BuildContext context)=>StreamBuilder<User?>(
-    stream:FirebaseAuth.instance.authStateChanges(),
-    builder:(context,s){
-      if(s.data==null)return const LoginPage();
-      return FutureBuilder<bool>(
-        future:_allowed(s.data!),
-        builder:(context,a){
-          if(!a.hasData)return const Scaffold(body:Center(child:CircularProgressIndicator()));
-          if(a.data!=true){FirebaseAuth.instance.signOut();return const LoginPage(message:'This account is not a Delivery Partner.');}
-          return DeliveryShell(user:s.data!);
-        },
-      );
-    },
-  );
+class AuthGate extends StatelessWidget{
+ const AuthGate({super.key});
+ @override Widget build(BuildContext context)=>StreamBuilder<User?>(stream:FirebaseAuth.instance.authStateChanges(),builder:(context,s){
+  if(s.data==null)return const LoginPage();
+  return FutureBuilder<DocumentSnapshot<Map<String,dynamic>>>(future:FirebaseFirestore.instance.collection('deliveryPartners').doc(s.data!.uid).get(),builder:(context,a){
+   if(!a.hasData)return const Scaffold(body:Center(child:CircularProgressIndicator()));
+   if(!a.data!.exists)return PartnerRegistrationPage(user:s.data!);
+   final p=a.data!.data()??{};final approval=(p['approvalStatus']??'').toString().toLowerCase();
+   if(approval=='pending')return PendingApprovalPage(user:s.data!,rejected:false);
+   if(approval=='rejected')return PendingApprovalPage(user:s.data!,rejected:true,reason:(p['rejectionReason']??'').toString());
+   return DeliveryShell(user:s.data!);
+  });
+ });
 }
 
 class LoginPage extends StatefulWidget {
