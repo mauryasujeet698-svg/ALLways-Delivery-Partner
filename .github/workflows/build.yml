@@ -84,9 +84,12 @@ jobs:
           s = s.replace('applicationId = "com.example.delivery"', 'applicationId = "com.allways.delivery"')
           if 'namespace = "com.allways.delivery"' not in s:
               s = s.replace("android {", 'android {\n    namespace = "com.allways.delivery"', 1)
+          s = s.replace('namespace = "com.example.delivery"', 'namespace = "com.allways.delivery"')
+          s = s.replace('applicationId = "com.example.delivery"', 'applicationId = "com.allways.delivery"')
+          if 'namespace = "com.allways.delivery"' not in s:
+              s = s.replace("android {", 'android {\\n    namespace = "com.allways.delivery"', 1)
           if 'applicationId = "com.allways.delivery"' not in s:
-              s = s.replace("applicationId = "", 'applicationId = "com.allways.delivery"\n    //', 1)
-              s = s.replace('applicationId = "com.allways.delivery"\n    //', 'applicationId = "com.allways.delivery"', 1)
+              s = s.replace('applicationId = ""', 'applicationId = "com.allways.delivery"', 1)
           p.write_text(s)
 
           manifest = Path("android/app/src/main/AndroidManifest.xml")
