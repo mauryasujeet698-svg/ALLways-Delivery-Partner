@@ -359,7 +359,7 @@ class _DeliveryShellState extends State<DeliveryShell>{
   @override void dispose(){locationSub?.cancel();super.dispose();}
   Future<void> _load() async {
     try{
-      final c=await FirebaseFirestore.instance.collection('customers').doc(widget.user.uid).get();
+      final c=await FirebaseFirestore.instance.collection('deliveryPartners').doc(widget.user.uid).get();
       online=((c.data()?['dutyStatus']??c.data()?['status']??'offline').toString().toLowerCase()=='online');
       if(online)await _startLocation();
     }catch(_){}
@@ -396,7 +396,6 @@ class _DeliveryShellState extends State<DeliveryShell>{
   Future<void> _saveLocation(Position p) async {
     try{
       final data={'deliveryLat':p.latitude,'deliveryLng':p.longitude,'deliveryLocationUpdatedAt':FieldValue.serverTimestamp()};
-      await FirebaseFirestore.instance.collection('customers').doc(widget.user.uid).set(data,SetOptions(merge:true));
       await FirebaseFirestore.instance.collection('deliveryPartners').doc(widget.user.uid).set({...data,'uid':widget.user.uid,'status':online?'online':'offline'},SetOptions(merge:true));
       if(selectedId!=null)await FirebaseFirestore.instance.collection('orders').doc(selectedId).set({'carrierLat':p.latitude,'carrierLng':p.longitude,'carrierLocationUpdatedAt':FieldValue.serverTimestamp()},SetOptions(merge:true));
     }catch(_){}
@@ -413,7 +412,6 @@ class _DeliveryShellState extends State<DeliveryShell>{
     if(value&&!await _locationPermission()){if(mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Location permission is required before going online.')));return;}
     if(value)await _startLocation();else await locationSub?.cancel();
     final data={'status':value?'online':'offline','dutyStatus':value?'online':'offline','availableForDeliveries':value,'statusUpdatedAt':FieldValue.serverTimestamp()};
-    await FirebaseFirestore.instance.collection('customers').doc(widget.user.uid).set(data,SetOptions(merge:true));
     await FirebaseFirestore.instance.collection('deliveryPartners').doc(widget.user.uid).set({...data,'uid':widget.user.uid},SetOptions(merge:true));
     if(mounted)setState(()=>online=value);
   }
