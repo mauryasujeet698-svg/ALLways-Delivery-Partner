@@ -1,18 +1,25 @@
+import 'dart:convert';
 import 'dart:async';
+import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import 'package:http/http.dart' as http;
+import 'package:image_picker/image_picker.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'account_theme.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 const blue=Color(0xFF1565C0), bg=Color(0xFFF7F8FB);
+const cloudinaryCloudName='busdtvia';
+const cloudinaryUploadPreset='allways_preset';
 
 @pragma('vm:entry-point')
 Future<void> _background(RemoteMessage message) async { await Firebase.initializeApp(); }
@@ -21,13 +28,16 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
   await GoogleSignIn.instance.initialize();
+  await appThemeController.load();
   FirebaseMessaging.onBackgroundMessage(_background);
   runApp(const AllwaysDeliveryApp());
 }
 
 class AllwaysDeliveryApp extends StatelessWidget {
   const AllwaysDeliveryApp({super.key});
-  @override Widget build(BuildContext context)=>MaterialApp(
+  @override Widget build(BuildContext context)=>ValueListenableBuilder<ThemeMode>(
+    valueListenable:appThemeController,
+    builder:(context,mode,_)=>MaterialApp(
     debugShowCheckedModeBanner:false,
     title:'ALLways Delivery Partner',
     theme:ThemeData(
@@ -37,7 +47,10 @@ class AllwaysDeliveryApp extends StatelessWidget {
       textTheme:GoogleFonts.poppinsTextTheme(),
       cardTheme:const CardThemeData(color:Colors.white,elevation:0,margin:EdgeInsets.zero),
     ),
+    themeMode:mode,
+    darkTheme:ThemeData(useMaterial3:true,colorScheme:ColorScheme.fromSeed(seedColor:blue,brightness:Brightness.dark),textTheme:GoogleFonts.poppinsTextTheme(ThemeData.dark().textTheme)),
     home:const AuthGate(),
+  ),
   );
 }
 
@@ -51,6 +64,7 @@ class AuthGate extends StatelessWidget{
    final p=a.data!.data()??{};final approval=(p['approvalStatus']??'').toString().toLowerCase();
    if(approval=='pending')return PendingApprovalPage(user:s.data!,rejected:false);
    if(approval=='rejected')return PendingApprovalPage(user:s.data!,rejected:true,reason:(p['rejectionReason']??'').toString());
+   if(approval=='suspended')return PendingApprovalPage(user:s.data!,rejected:true,reason:(p['suspensionReason']??'Account suspended by Admin.').toString());
    return DeliveryShell(user:s.data!);
   });
  });
@@ -145,21 +159,58 @@ class _PartnerRegistrationPageState extends State<PartnerRegistrationPage> {
   final mobile = TextEditingController();
   final address = TextEditingController();
   final vehicleType = TextEditingController();
+  static const vehicleTypeOptions = <String>[    'bike',
+    'scooter',
+    'cycle',
+    'auto',
+    'e_rickshaw',
+  ];
   final vehicleNumber = TextEditingController();
+  XFile? profilePhoto;
+  XFile? vehiclePhoto;
   bool busy = false;
   String? error;
+
+  Future<XFile?> _pickPhoto() => ImagePicker().pickImage(source: ImageSource.gallery, imageQuality: 60, maxWidth: 800);
+
+  Future<String> _uploadPhoto(XFile file, String folder) async {
+    final request = http.MultipartRequest('POST', Uri.parse('https://api.cloudinary.com/v1_1/$cloudinaryCloudName/image/upload'));
+    request.fields['upload_preset'] = cloudinaryUploadPreset;
+    request.fields['folder'] = folder;
+    request.files.add(await http.MultipartFile.fromPath('file', file.path));
+    final response = await request.send();
+    final body = await response.stream.bytesToString();
+    if (response.statusCode < 200 || response.statusCode >= 300) throw Exception('Photo upload failed: $body');
+    final match = RegExp(r'"secure_url"\s*:\s*"([^"]+)"').firstMatch(body);
+    if (match == null) throw Exception('Cloudinary did not return a secure URL.');
+    return match.group(1)!;
+  }
+
+  Future<void> _chooseProfilePhoto() async {
+    try { final f=await _pickPhoto(); if(f!=null && mounted)setState(()=>profilePhoto=f); }
+    catch(e){ if(mounted)setState(()=>error=e.toString()); }
+  }
+
+  Future<void> _chooseVehiclePhoto() async {
+    try { final f=await _pickPhoto(); if(f!=null && mounted)setState(()=>vehiclePhoto=f); }
+    catch(e){ if(mounted)setState(()=>error=e.toString()); }
+  }
 
   Future<void> submit() async {
     if (name.text.trim().isEmpty ||
         mobile.text.trim().isEmpty ||
         address.text.trim().isEmpty ||
         vehicleType.text.trim().isEmpty ||
-        vehicleNumber.text.trim().isEmpty) {
-      setState(() => error = 'Please complete all required fields.');
+        vehicleNumber.text.trim().isEmpty ||
+        profilePhoto == null ||
+        vehiclePhoto == null) {
+      setState(() => error = 'Please complete all required fields and photos.');
       return;
     }
     setState(() { busy = true; error = null; });
     try {
+      final profileUrl = await _uploadPhoto(profilePhoto!, 'allways/profiles/delivery_partners');
+      final vehicleUrl = await _uploadPhoto(vehiclePhoto!, 'allways/vehicles/delivery_partners');
       final ref = FirebaseFirestore.instance.collection('deliveryPartners').doc(widget.user.uid);
       await ref.set({
         'uid': widget.user.uid,
@@ -172,7 +223,8 @@ class _PartnerRegistrationPageState extends State<PartnerRegistrationPage> {
         'address': address.text.trim(),
         'vehicleType': vehicleType.text.trim().toLowerCase(),
         'vehicleNumber': vehicleNumber.text.trim().toUpperCase(),
-        'profilePhotoUrl': widget.user.photoURL,
+        'profilePhotoUrl': profileUrl,
+        'vehiclePhotoUrl': vehicleUrl,
         'approvalStatus': 'pending',
         'status': 'pending',
         'availableForDeliveries': false,
@@ -181,10 +233,22 @@ class _PartnerRegistrationPageState extends State<PartnerRegistrationPage> {
         'createdAt': FieldValue.serverTimestamp(),
         'submittedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
+      if (mounted) Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => PendingApprovalPage(user: widget.user, rejected: false)));
     } catch (e) {
       if (mounted) setState(() => error = e.toString());
     } finally {
       if (mounted) setState(() => busy = false);
+    }
+  }
+
+  String _vehicleLabel(String type) {
+    switch (type) {
+      case 'bike': return 'Bike / Motorcycle';
+      case 'scooter': return 'Scooter';
+      case 'cycle': return 'Cycle';
+      case 'auto': return 'Auto Rickshaw';
+      case 'e_rickshaw': return 'E-Rickshaw';
+      default: return type;
     }
   }
 
@@ -213,8 +277,43 @@ class _PartnerRegistrationPageState extends State<PartnerRegistrationPage> {
           field(name, 'Full name'),
           field(mobile, 'Mobile number', keyboard: TextInputType.phone),
           field(address, 'Address'),
-          field(vehicleType, 'Vehicle type'),
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: DropdownButtonFormField<String>(
+              value: vehicleType.text.isEmpty ? null : vehicleType.text,
+              decoration: const InputDecoration(
+                labelText: 'Vehicle type',
+                border: OutlineInputBorder(),
+              ),
+              hint: const Text('Select vehicle type'),
+              items: vehicleTypeOptions.map((type) => DropdownMenuItem<String>(
+                value: type,
+                child: Text(_vehicleLabel(type)),
+              )).toList(),
+              onChanged: busy ? null : (value) {
+                if (value != null) setState(() => vehicleType.text = value);
+              },
+            ),
+          ),
           field(vehicleNumber, 'Vehicle number'),
+          OutlinedButton.icon(
+            onPressed: busy ? null : _chooseProfilePhoto,
+            icon: const Icon(Icons.photo_camera_outlined),
+            label: Text(profilePhoto == null ? 'Upload profile photo' : 'Profile photo selected'),
+          ),
+          if (profilePhoto != null) Padding(
+            padding: const EdgeInsets.only(top: 8, bottom: 8),
+            child: ClipRRect(borderRadius: BorderRadius.circular(12), child: Image.file(File(profilePhoto!.path), height: 140, width: double.infinity, fit: BoxFit.cover)),
+          ),
+          OutlinedButton.icon(
+            onPressed: busy ? null : _chooseVehiclePhoto,
+            icon: const Icon(Icons.directions_car_outlined),
+            label: Text(vehiclePhoto == null ? 'Upload vehicle photo' : 'Vehicle photo selected'),
+          ),
+          if (vehiclePhoto != null) Padding(
+            padding: const EdgeInsets.only(top: 8, bottom: 8),
+            child: ClipRRect(borderRadius: BorderRadius.circular(12), child: Image.file(File(vehiclePhoto!.path), height: 140, width: double.infinity, fit: BoxFit.cover)),
+          ),
           if (error != null)
             Padding(
               padding: const EdgeInsets.only(bottom: 12),
@@ -274,7 +373,7 @@ class PendingApprovalPage extends StatelessWidget {
                   Text(
                     rejected
                         ? (reason.isEmpty ? 'Please contact ALLways support for the next step.' : 'Reason: $reason')
-                        : 'Your registration has been submitted. You can go online and accept work after Admin approval.',
+                        : 'Request submitted. Waiting for approval.',
                     textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: 20),
@@ -303,8 +402,10 @@ class _DeliveryShellState extends State<DeliveryShell>{
   @override void dispose(){locationSub?.cancel();super.dispose();}
   Future<void> _load() async {
     try{
-      final c=await FirebaseFirestore.instance.collection('customers').doc(widget.user.uid).get();
+      final c=await FirebaseFirestore.instance.collection('deliveryPartners').doc(widget.user.uid).get();
       online=((c.data()?['dutyStatus']??c.data()?['status']??'offline').toString().toLowerCase()=='online');
+      selectedId=(c.data()?['currentOrderId']??c.data()?['pendingOrderId']??'').toString();
+      if(selectedId!=null&&selectedId!.isEmpty)selectedId=null;
       if(online)await _startLocation();
     }catch(_){}
     if(mounted)setState((){});
@@ -317,8 +418,13 @@ class _DeliveryShellState extends State<DeliveryShell>{
       if(s.authorizationStatus==AuthorizationStatus.denied)return;
       await FirebaseMessaging.instance.subscribeToTopic('all_users');
       await FirebaseMessaging.instance.subscribeToTopic('delivery_partners');
-      final t=await FirebaseMessaging.instance.getToken();
-      if(t!=null&&t.isNotEmpty)await FirebaseFirestore.instance.collection('fcmTokens').doc(widget.user.uid).collection('tokens').doc(t).set({'uid':widget.user.uid,'token':t,'role':'delivery_partner','updatedAt':FieldValue.serverTimestamp()},SetOptions(merge:true));
+      await p.setBool('notifications_enabled', true);
+      Future<void> saveToken(String? t) async {
+        if(t==null||t.isEmpty)return;
+        await FirebaseFirestore.instance.collection('fcmTokens').doc(widget.user.uid).collection('tokens').doc(t).set({'uid':widget.user.uid,'token':t,'role':'delivery_partner','updatedAt':FieldValue.serverTimestamp()},SetOptions(merge:true));
+      }
+      await saveToken(await FirebaseMessaging.instance.getToken());
+      FirebaseMessaging.instance.onTokenRefresh.listen(saveToken);
     }catch(_){}
   }
   Future<bool> _locationPermission() async {
@@ -340,7 +446,6 @@ class _DeliveryShellState extends State<DeliveryShell>{
   Future<void> _saveLocation(Position p) async {
     try{
       final data={'deliveryLat':p.latitude,'deliveryLng':p.longitude,'deliveryLocationUpdatedAt':FieldValue.serverTimestamp()};
-      await FirebaseFirestore.instance.collection('customers').doc(widget.user.uid).set(data,SetOptions(merge:true));
       await FirebaseFirestore.instance.collection('deliveryPartners').doc(widget.user.uid).set({...data,'uid':widget.user.uid,'status':online?'online':'offline'},SetOptions(merge:true));
       if(selectedId!=null)await FirebaseFirestore.instance.collection('orders').doc(selectedId).set({'carrierLat':p.latitude,'carrierLng':p.longitude,'carrierLocationUpdatedAt':FieldValue.serverTimestamp()},SetOptions(merge:true));
     }catch(_){}
@@ -357,30 +462,98 @@ class _DeliveryShellState extends State<DeliveryShell>{
     if(value&&!await _locationPermission()){if(mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Location permission is required before going online.')));return;}
     if(value)await _startLocation();else await locationSub?.cancel();
     final data={'status':value?'online':'offline','dutyStatus':value?'online':'offline','availableForDeliveries':value,'statusUpdatedAt':FieldValue.serverTimestamp()};
-    await FirebaseFirestore.instance.collection('customers').doc(widget.user.uid).set(data,SetOptions(merge:true));
     await FirebaseFirestore.instance.collection('deliveryPartners').doc(widget.user.uid).set({...data,'uid':widget.user.uid},SetOptions(merge:true));
     if(mounted)setState(()=>online=value);
   }
   Future<void> _accept(QueryDocumentSnapshot<Map<String,dynamic>> doc) async {
-    try{
-      await FirebaseFirestore.instance.runTransaction((tx)async{
-        final latest=await tx.get(doc.reference);final x=latest.data()??{};
-        if((x['carrierUid']??x['deliveryPartnerUid']??'').toString().isNotEmpty)throw Exception('This order is already assigned.');
-        final status=(x['status']??'').toString().toLowerCase();
-        if(status=='delivered'||status=='cancelled')throw Exception('This order is no longer available.');
-        final profile=await tx.get(FirebaseFirestore.instance.collection('customers').doc(widget.user.uid));
-        final p=profile.data()??{};
-        tx.update(doc.reference,{'carrierUid':widget.user.uid,'deliveryPartnerUid':widget.user.uid,'carrierName':p['name']??p['displayName']??'ALLways Delivery Partner','carrierPhone':p['phone']??p['mobileNumber']??widget.user.phoneNumber??'','status':'Assigned','carrierAccepted':true,'assignedAt':FieldValue.serverTimestamp(),'updatedAt':FieldValue.serverTimestamp()});
+    try {
+      await FirebaseFirestore.instance.runTransaction((tx) async {
+        final latest = await tx.get(doc.reference);
+        final x = latest.data() ?? {};
+        final assigned = (x['carrierUid'] ?? '').toString();
+        if (assigned != widget.user.uid) throw Exception('This delivery is not assigned to you.');
+        if ((x['status'] ?? '').toString().toLowerCase() != 'pending_acceptance') {
+          throw Exception('This delivery is no longer awaiting acceptance.');
+        }
+        final profile = await tx.get(
+          FirebaseFirestore.instance.collection('deliveryPartners').doc(widget.user.uid),
+        );
+        final p = profile.data() ?? {};
+        tx.update(doc.reference, {
+          'carrierUid': widget.user.uid,
+          'assignedPartnerId': widget.user.uid,
+          'carrierName': p['name'] ?? p['displayName'] ?? 'ALLways Delivery Partner',
+          'carrierPhone': p['phone'] ?? p['mobileNumber'] ?? widget.user.phoneNumber ?? '',
+          'carrierAccepted': true,
+          'assignmentRejected': false,
+          'status': 'Assigned',
+          'statusNote': 'Accepted by delivery partner',
+          'acceptedAt': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+        tx.set(
+          profile.reference,
+          {
+            'pendingOrderId': null,
+            'currentOrderId': doc.id,
+            'availableForDeliveries': false,
+            'dutyStatus': 'on_delivery',
+            'updatedAt': FieldValue.serverTimestamp(),
+          },
+          SetOptions(merge: true),
+        );
       });
-      if(mounted){setState(()=>selectedId=doc.id);ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Order accepted.')));}
-    }catch(e){if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text(e.toString().replaceFirst('Exception: ',''))));}
+      if (mounted) {
+        setState(() => selectedId = doc.id);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Order accepted.')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))),
+        );
+      }
+    }
   }
+
+  Future<void> _reject(QueryDocumentSnapshot<Map<String,dynamic>> doc) async {
+    try {
+      final x = doc.data();
+      if ((x['carrierUid'] ?? '').toString() != widget.user.uid) {
+        throw Exception('This delivery is not assigned to you.');
+      }
+      await doc.reference.update({
+        'carrierUid': null,
+        'assignedPartnerId': null,
+        'carrierAccepted': false,
+        'assignmentRejected': true,
+        'status': 'unassigned',
+        'statusNote': 'Rejected by delivery partner',
+        'rejectedAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Delivery offer rejected. Admin can reassign it.')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not reject: '+e.toString().replaceFirst('Exception: ', ''))),
+        );
+      }
+    }
+  }
+
   Future<void> _status(DocumentReference ref,String value) async {try{await ref.update({'status':value,'updatedAt':FieldValue.serverTimestamp(),'statusNote':'Updated by ALLways Delivery Partner'});}catch(e){if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text('Update failed: '+e.toString())));}}
   Future<void> _call(String phone)async{final p=phone.replaceAll(RegExp(r'[^0-9+]'),'');if(p.isNotEmpty)await launchUrl(Uri(scheme:'tel',path:p),mode:LaunchMode.externalApplication);}
   Future<void> _sos()async{await FirebaseFirestore.instance.collection('sosAlerts').add({'uid':widget.user.uid,'role':'delivery_partner','createdAt':FieldValue.serverTimestamp(),'status':'open'});if(mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('SOS alert sent to ALLways operations.')));}
   @override Widget build(BuildContext context){
     final pages=[
-      DeliveryHome(online:online,position:position,onOnline:_setOnline,onAccept:_accept,onSelect:(id)=>setState(()=>selectedId=id)),
+      DeliveryHome(userUid:widget.user.uid,online:online,position:position,onOnline:_setOnline,onAccept:_accept,onReject:_reject,onSelect:(id)=>setState(()=>selectedId=id)),
       DeliveryOrders(user:widget.user,onStatus:_status,onSelect:(id)=>setState(()=>selectedId=id),onCall:_call),
       DeliveryMap(user:widget.user,selectedId:selectedId,position:position),
       Earnings(user:widget.user),
@@ -400,38 +573,84 @@ class _DeliveryShellState extends State<DeliveryShell>{
 }
 
 class DeliveryHome extends StatelessWidget{
-  final bool online;final Position? position;final Future<void> Function(bool) onOnline;final Future<void> Function(QueryDocumentSnapshot<Map<String,dynamic>>) onAccept;final void Function(String) onSelect;
-  const DeliveryHome({super.key,required this.online,required this.position,required this.onOnline,required this.onAccept,required this.onSelect});
-  double n(dynamic v)=>v is num?v.toDouble():double.tryParse((v??'').toString())??0;
-  @override Widget build(BuildContext c)=>ListView(padding:const EdgeInsets.fromLTRB(16,18,16,28),children:[
-    Row(children:[const Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text('ALLways Delivery',style:TextStyle(fontSize:24,fontWeight:FontWeight.w900)),SizedBox(height:3),Text('Nearby orders and live delivery work',style:TextStyle(color:Colors.grey))])),Switch(value:online,onChanged:onOnline)]),
-    const SizedBox(height:12),
-    Card(color:blue.withOpacity(.07),shape:RoundedRectangleBorder(borderRadius:BorderRadius.circular(22)),child:Padding(padding:const EdgeInsets.all(16),child:Row(children:[CircleAvatar(radius:26,backgroundColor:blue.withOpacity(.12),child:Icon(online?Icons.wifi_tethering:Icons.wifi_off,color:blue)),const SizedBox(width:12),Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text(online?'You are online':'You are offline',style:const TextStyle(fontSize:18,fontWeight:FontWeight.w900)),Text(online?'New delivery work can be assigned.':'Turn on duty status to receive nearby work.',style:const TextStyle(color:Colors.grey))]))]))),
-    const SizedBox(height:16),
-    StreamBuilder<QuerySnapshot<Map<String,dynamic>>>(
-      stream:FirebaseFirestore.instance.collection('orders').snapshots(),
-      builder:(context,s){
-        if(!s.hasData)return const Card(child:Padding(padding:EdgeInsets.all(24),child:Center(child:CircularProgressIndicator())));
-        if(!online||position==null)return Card(child:Padding(padding:const EdgeInsets.all(24),child:Center(child:Text(online?'Waiting for live location...':'Go online to view nearby delivery requests.'))));
-        final list=<QueryDocumentSnapshot<Map<String,dynamic>>>[];
-        for(final d in s.data!.docs){
-          final x=d.data();final assigned=(x['carrierUid']??x['deliveryPartnerUid']??'').toString();final status=(x['status']??'').toString().toLowerCase();
-          final lat=n(x['customerLatitude']??x['pickupLatitude']??x['pickupLat']);final lng=n(x['customerLongitude']??x['pickupLongitude']??x['pickupLng']);
-          if(assigned.isNotEmpty||status=='delivered'||status=='cancelled'||lat==0||lng==0)continue;
-          if(Geolocator.distanceBetween(position!.latitude,position!.longitude,lat,lng)<=7000)list.add(d);
-        }
-        if(list.isEmpty)return const Card(child:Padding(padding:EdgeInsets.all(24),child:Center(child:Text('No nearby delivery requests within 7 km.'))));
-        return Column(children:list.map((d){
-          final x=d.data();final km=Geolocator.distanceBetween(position!.latitude,position!.longitude,n(x['customerLatitude']??x['pickupLatitude']??x['pickupLat']),n(x['customerLongitude']??x['pickupLongitude']??x['pickupLng']))/1000;
-          return Card(margin:const EdgeInsets.only(bottom:10),child:Padding(padding:const EdgeInsets.all(14),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
-            Row(children:[const CircleAvatar(backgroundColor:Color(0x1A1565C0),child:Icon(Icons.inventory_2_outlined,color:blue)),const SizedBox(width:10),Expanded(child:Text('#'+(x['id']??d.id).toString(),style:const TextStyle(fontWeight:FontWeight.w900))),Text(km.toStringAsFixed(1)+' km',style:const TextStyle(color:blue,fontWeight:FontWeight.w800))]),
-            const SizedBox(height:8),Text((x['name']??x['customerName']??'Customer').toString(),style:const TextStyle(fontWeight:FontWeight.w700)),Text((x['address']??'Pickup address unavailable').toString(),maxLines:2,overflow:TextOverflow.ellipsis),const SizedBox(height:8),Text('₹'+n(x['total']).toStringAsFixed(0),style:const TextStyle(fontSize:18,fontWeight:FontWeight.w900)),
-            const SizedBox(height:10),Row(children:[Expanded(child:OutlinedButton(onPressed:()=>onSelect(d.id),child:const Text('View map'))),const SizedBox(width:8),Expanded(child:FilledButton(onPressed:()=>onAccept(d),style:FilledButton.styleFrom(backgroundColor:blue),child:const Text('Accept')))]),
-          ])));
-        }).toList());
-      },
-    ),
-  ]);
+  final bool online;
+  final Position? position;
+  final String userUid;
+  final Future<void> Function(bool) onOnline;
+  final Future<void> Function(QueryDocumentSnapshot<Map<String,dynamic>>) onAccept;
+  final Future<void> Function(QueryDocumentSnapshot<Map<String,dynamic>>) onReject;
+  final void Function(String) onSelect;
+
+  const DeliveryHome({
+    super.key,
+    required this.online,
+    required this.position,
+    required this.userUid,
+    required this.onOnline,
+    required this.onAccept,
+    required this.onReject,
+    required this.onSelect,
+  });
+
+  @override
+  Widget build(BuildContext c)=>ListView(
+    padding:const EdgeInsets.fromLTRB(16,18,16,28),
+    children:[
+      Row(children:[
+        const Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+          Text('ALLways Delivery',style:TextStyle(fontSize:24,fontWeight:FontWeight.w900)),
+          SizedBox(height:3),
+          Text('Assigned delivery work and live delivery status',style:TextStyle(color:Colors.grey)),
+        ])),
+        Switch(value:online,onChanged:onOnline),
+      ]),
+      const SizedBox(height:12),
+      Card(
+        color:blue.withOpacity(.07),
+        shape:RoundedRectangleBorder(borderRadius:BorderRadius.circular(22)),
+        child:Padding(
+          padding:const EdgeInsets.all(16),
+          child:Row(children:[
+            CircleAvatar(radius:26,backgroundColor:blue.withOpacity(.12),child:Icon(online?Icons.wifi_tethering:Icons.wifi_off,color:blue)),
+            const SizedBox(width:12),
+            Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+              Text(online?'You are online':'You are offline',style:const TextStyle(fontSize:18,fontWeight:FontWeight.w900)),
+              const Text('Orders are assigned by ALLways Admin.',style:TextStyle(color:Colors.grey)),
+            ])),
+          ]),
+        ),
+      ),
+      const SizedBox(height:16),
+      StreamBuilder<QuerySnapshot<Map<String,dynamic>>>(
+        stream:FirebaseFirestore.instance.collection('orders').where('carrierUid',isEqualTo:userUid).snapshots(),
+        builder:(context,s){
+          if(s.hasError)return Card(child:Padding(padding:const EdgeInsets.all(20),child:Text('Could not load assigned offers: '+s.error.toString())));
+          if(!s.hasData)return const Card(child:Padding(padding:EdgeInsets.all(24),child:Center(child:CircularProgressIndicator())));
+          final offers=s.data!.docs.where((d)=>(d.data()['status']??'').toString().toLowerCase()=='pending_acceptance').toList();
+          if(offers.isEmpty)return const Card(child:Padding(padding:EdgeInsets.all(24),child:Center(child:Text('No pending delivery assignments.'))));
+          return Column(children:offers.map((d){
+            final x=d.data();
+            return Card(margin:const EdgeInsets.only(bottom:10),child:Padding(padding:const EdgeInsets.all(14),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+              Text('#'+(x['id']??d.id).toString(),style:const TextStyle(fontWeight:FontWeight.w900)),
+              const SizedBox(height:7),
+              Text((x['name']??x['customerName']??'Customer').toString(),style:const TextStyle(fontWeight:FontWeight.w700)),
+              Text((x['address']??'Address unavailable').toString(),maxLines:2,overflow:TextOverflow.ellipsis),
+              const SizedBox(height:8),
+              Text('₹'+(x['total']??0).toString(),style:const TextStyle(fontSize:18,fontWeight:FontWeight.w900)),
+              const SizedBox(height:10),
+              Row(children:[
+                Expanded(child:OutlinedButton(onPressed:()=>onReject(d),child:const Text('Reject'))),
+                const SizedBox(width:8),
+                Expanded(child:OutlinedButton(onPressed:()=>onSelect(d.id),child:const Text('View map'))),
+                const SizedBox(width:8),
+                Expanded(child:FilledButton(onPressed:()=>onAccept(d),style:FilledButton.styleFrom(backgroundColor:blue),child:const Text('Accept'))),
+              ]),
+            ])));
+          }).toList());
+        },
+      ),
+    ],
+  );
 }
 
 class DeliveryOrders extends StatelessWidget{
@@ -461,27 +680,49 @@ class DeliveryOrders extends StatelessWidget{
   );
 }
 
-class DeliveryMap extends StatelessWidget{
+class DeliveryMap extends StatefulWidget{
   final User user;final String? selectedId;final Position? position;
   const DeliveryMap({super.key,required this.user,required this.selectedId,required this.position});
-  double n(dynamic v)=>v is num?v.toDouble():double.tryParse((v??'').toString())??0;
-  @override Widget build(BuildContext c)=>StreamBuilder<QuerySnapshot<Map<String,dynamic>>>(
-    stream:FirebaseFirestore.instance.collection('orders').where('carrierUid',isEqualTo:user.uid).snapshots(),
-    builder:(context,s){
-      QueryDocumentSnapshot<Map<String,dynamic>>? chosen;
-      for(final d in s.data?.docs??const <QueryDocumentSnapshot<Map<String,dynamic>>>[])if(selectedId==d.id)chosen=d;
-      chosen??=(s.data?.docs.isNotEmpty==true?s.data!.docs.first:null);
-      final x=chosen?.data();final lat=n(x?['customerLatitude']??x?['destinationLatitude']);final lng=n(x?['customerLongitude']??x?['destinationLongitude']);
-      final center=position==null?const LatLng(25.4358,81.8463):LatLng(position!.latitude,position!.longitude);
-      final markers=<Marker>[if(position!=null)Marker(point:center,width:54,height:54,child:const Pin(color:blue,icon:Icons.local_shipping)),if(lat!=0&&lng!=0)Marker(point:LatLng(lat,lng),width:54,height:54,child:const Pin(color:Colors.red,icon:Icons.location_on))];
-      return Stack(children:[
-        FlutterMap(options:MapOptions(initialCenter:center,initialZoom:15),children:[TileLayer(urlTemplate:'https://tile.openstreetmap.org/{z}/{x}/{y}.png',maxZoom:19,userAgentPackageName:'com.allways.delivery'),MarkerLayer(markers:markers)]),
-        Positioned(top:14,left:14,right:14,child:SafeArea(bottom:false,child:Card(child:Padding(padding:const EdgeInsets.all(13),child:Row(children:[const Icon(Icons.location_searching,color:blue),const SizedBox(width:9),Expanded(child:Text(chosen==null?'Live delivery map':'Tracking order #'+chosen.id,style:const TextStyle(fontWeight:FontWeight.w800)))]))))),
-      ]);
-    },
-  );
+  @override State<DeliveryMap> createState()=>_DeliveryMapState();
 }
 
+class _DeliveryMapState extends State<DeliveryMap>{
+  final MapController _map=MapController();
+  List<LatLng> route=[];List<Map<String,dynamic>> steps=[];double? routeDistance,routeDuration;String? loadedId;bool loading=false;
+  double n(dynamic v)=>v is num?v.toDouble():double.tryParse((v??'').toString())??0;
+  LatLng? point(dynamic a,dynamic b){final x=n(a),y=n(b);return x==0||y==0?null:LatLng(x,y);}
+  @override void didUpdateWidget(covariant DeliveryMap old){super.didUpdateWidget(old);if(widget.selectedId!=old.selectedId)load();}
+  @override void initState(){super.initState();WidgetsBinding.instance.addPostFrameCallback((_){load();});}
+  Future<void> load()async{
+    final id=widget.selectedId;if(id==null||id.isEmpty)return;
+    try{
+      final snap=await FirebaseFirestore.instance.collection('orders').doc(id).get();final x=snap.data()??{};
+      final target=point(x['customerLatitude']??x['destinationLatitude']??x['latitude'],x['customerLongitude']??x['destinationLongitude']??x['longitude']);
+      final start=widget.position==null?null:LatLng(widget.position!.latitude,widget.position!.longitude);
+      if(start==null||target==null)return;loading=true;if(mounted)setState((){});
+      final url=Uri.parse('https://router.project-osrm.org/route/v1/driving/\${start.longitude},\${start.latitude};\${target.longitude},\${target.latitude}?overview=full&geometries=geojson&steps=true');
+      final res=await http.get(url);if(res.statusCode!=200)return;
+      final body=jsonDecode(res.body),routes=body['routes'];if(routes is! List||routes.isEmpty)return;final r=routes.first;
+      final coords=r['geometry']?['coordinates'];
+      final pts=coords is List?coords.whereType<List>().where((q)=>q.length>=2).map((q)=>LatLng((q[1] as num).toDouble(),(q[0] as num).toDouble())).toList():<LatLng>[];
+      final ss=<Map<String,dynamic>>[];final legs=r['legs'];
+      if(legs is List)for(final leg in legs){final raw=leg['steps'];if(raw is! List)continue;for(final step in raw){final m=step['maneuver'] is Map?Map<String,dynamic>.from(step['maneuver']):<String,dynamic>{};ss.add({'instruction':(m['type']??'continue').toString()=='arrive'?'You have arrived':(m['modifier']??'Continue straight').toString().replaceAll('_',' '),'road':(step['name']??'').toString(),'distance':step['distance'] is num?(step['distance'] as num).toDouble():0});}}
+      if(mounted)setState((){route=pts;steps=ss;routeDistance=r['distance'] is num?(r['distance'] as num).toDouble():null;routeDuration=r['duration'] is num?(r['duration'] as num).toDouble():null;loadedId=id;});
+    }catch(_){}finally{loading=false;if(mounted)setState((){});}
+  }
+  Widget pin(Color c,IconData i)=>Container(decoration:BoxDecoration(color:c,shape:BoxShape.circle,border:Border.all(color:Colors.white,width:4),boxShadow:const[BoxShadow(color:Colors.black26,blurRadius:6)]),child:Icon(i,color:Colors.white,size:25));
+  @override Widget build(BuildContext c)=>StreamBuilder<DocumentSnapshot<Map<String,dynamic>>>(stream:widget.selectedId==null?null:FirebaseFirestore.instance.collection('orders').doc(widget.selectedId).snapshots(),builder:(context,s){
+    final x=s.data?.data()??{};final target=point(x['customerLatitude']??x['destinationLatitude']??x['latitude'],x['customerLongitude']??x['destinationLongitude']??x['longitude']);final me=widget.position==null?null:LatLng(widget.position!.latitude,widget.position!.longitude);
+    final center=me??target??const LatLng(25.4358,81.8463);
+    final markers=<Marker>[if(me!=null)Marker(point:me,width:56,height:56,child:pin(blue,Icons.local_shipping)),if(target!=null)Marker(point:target,width:56,height:56,child:pin(Colors.red,Icons.person))];
+    final d=me!=null&&target!=null?Geolocator.distanceBetween(me.latitude,me.longitude,target.latitude,target.longitude):null;
+    return Stack(children:[FlutterMap(mapController:_map,options:MapOptions(initialCenter:center,initialZoom:15),children:[TileLayer(urlTemplate:'https://tile.openstreetmap.org/{z}/{x}/{y}.png',maxZoom:19,userAgentPackageName:'com.allways.delivery'),if(route.isNotEmpty)PolylineLayer(polylines:[Polyline(points:route,color:blue,strokeWidth:6)]),MarkerLayer(markers:markers)]),
+      Positioned(top:12,left:12,right:12,child:SafeArea(bottom:false,child:Card(color:const Color(0xFFFDECEF),child:Padding(padding:const EdgeInsets.all(13),child:Row(children:[const Icon(Icons.circle,color:Colors.green,size:12),const SizedBox(width:8),Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[const Text('Live delivery navigation',style:TextStyle(fontWeight:FontWeight.w900)),Text(d==null?'Waiting for live location':(d<1000?d.round().toString()+' m from customer':(d/1000).toStringAsFixed(1)+' km from customer'),style:const TextStyle(color:Colors.grey,fontSize:12))]))]))))),
+      if(steps.isNotEmpty)Positioned(top:86,left:12,right:12,child:Card(child:Padding(padding:const EdgeInsets.all(14),child:Row(children:[Container(width:48,height:48,alignment:Alignment.center,decoration:BoxDecoration(color:blue,borderRadius:BorderRadius.circular(14)),child:const Icon(Icons.navigation,color:Colors.white,size:27)),const SizedBox(width:12),Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text('Next turn',style:TextStyle(fontSize:17,fontWeight:FontWeight.w900)),Text('Follow the highlighted route',style:TextStyle(color:Colors.grey))]))])))),
+      Positioned(left:12,right:12,bottom:18,child:SafeArea(top:false,child:Card(child:Padding(padding:const EdgeInsets.all(14),child:Row(children:[Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[const Text('Customer delivery',style:TextStyle(fontWeight:FontWeight.w900,fontSize:16)),if(routeDistance!=null)Text((routeDistance!<1000?routeDistance!.round().toString()+' m':(routeDistance!/1000).toStringAsFixed(1)+' km')+' route • ETA '+((routeDuration??0)/60).ceil().toString()+' min',style:const TextStyle(color:Colors.grey))])),if(widget.selectedId!=null)IconButton(onPressed:load,icon:const Icon(Icons.refresh))]))))),
+    ]);
+  });
+}
 class Pin extends StatelessWidget{final Color color;final IconData icon;const Pin({super.key,required this.color,required this.icon});@override Widget build(BuildContext c)=>Container(decoration:BoxDecoration(color:color,shape:BoxShape.circle,border:Border.all(color:Colors.white,width:4),boxShadow:const[BoxShadow(color:Colors.black26,blurRadius:6)]),child:Icon(icon,color:Colors.white,size:25));}
 
 class Earnings extends StatelessWidget{
@@ -500,9 +741,11 @@ class Profile extends StatelessWidget{
   @override Widget build(BuildContext c)=>ListView(padding:const EdgeInsets.fromLTRB(16,18,16,28),children:[
     const Text('Profile & Safety',style:TextStyle(fontSize:24,fontWeight:FontWeight.w900)),const SizedBox(height:12),
     Card(child:ListTile(leading:const Icon(Icons.person_outline,color:blue),title:Text(user.displayName??'Delivery Partner'),subtitle:Text(user.email??''))),
-    const Card(child:ListTile(leading:Icon(Icons.description_outlined),title:Text('Documents'),subtitle:Text('Keep vehicle and verification details current.'))),
-    const Card(child:ListTile(leading:Icon(Icons.help_outline),title:Text('Help & Support'),subtitle:Text('Contact ALLways operations for delivery issues.'))),
+    Card(child:ListTile(leading:const Icon(Icons.description_outlined),title:const Text('Documents'),subtitle:const Text('Keep vehicle and verification details current.'),onTap:()=>showDialog(context:c,builder:(_)=>AlertDialog(title:const Text('Documents'),content:const Text('Your submitted profile and vehicle documents are stored with your ALLways partner account. Contact ALLways operations if a document needs correction.'),actions:[TextButton(onPressed:()=>Navigator.pop(c),child:const Text('Close'))])))),
+    Card(child:ListTile(leading:const Icon(Icons.help_outline),title:const Text('Help & Support'),subtitle:const Text('Contact ALLways operations for delivery issues.'),onTap:()=>showDialog(context:c,builder:(_)=>AlertDialog(title:const Text('Help & Support'),content:const Text('For delivery issues, contact ALLways operations with the order ID and a short description of the problem.'),actions:[TextButton(onPressed:()=>Navigator.pop(c),child:const Text('Close'))])))),
     Card(child:ListTile(leading:const Icon(Icons.sos,color:Colors.red),title:const Text('SOS / Emergency'),subtitle:const Text('Send an alert to ALLways operations.'),onTap:onSos)),
+    Card(child:ListTile(leading:const Icon(Icons.palette_outlined,color:blue),title:const Text('Change Theme'),subtitle:const Text('Light, dark or system default'),trailing:const Icon(Icons.chevron_right),onTap:()=>Navigator.push(c,MaterialPageRoute(builder:(_)=>ThemeSettingsPage(accent:blue))))),
+    Card(child:ListTile(leading:const Icon(Icons.manage_accounts,color:blue),title:const Text('Account Settings'),subtitle:const Text('Login, sign out and account deletion'),trailing:const Icon(Icons.chevron_right),onTap:()=>Navigator.push(c,MaterialPageRoute(builder:(_)=>AccountSettingsPage(user:user,collection:'deliveryPartners',accent:blue,role:'delivery_partner'))))),
     Card(child:ListTile(leading:const Icon(Icons.logout),title:const Text('Sign out'),onTap:()=>FirebaseAuth.instance.signOut())),
   ]);
 }
