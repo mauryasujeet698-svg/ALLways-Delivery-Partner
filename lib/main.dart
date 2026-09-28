@@ -144,7 +144,7 @@ class _PartnerRegistrationPageState extends State<PartnerRegistrationPage> {
   final name = TextEditingController();
   final mobile = TextEditingController();
   final address = TextEditingController();
-  final vehicleType = TextEditingController();
+  String vehicleType = 'bike';
   final vehicleNumber = TextEditingController();
   bool busy = false;
   String? error;
@@ -153,8 +153,7 @@ class _PartnerRegistrationPageState extends State<PartnerRegistrationPage> {
     if (name.text.trim().isEmpty ||
         mobile.text.trim().isEmpty ||
         address.text.trim().isEmpty ||
-        vehicleType.text.trim().isEmpty ||
-        vehicleNumber.text.trim().isEmpty) {
+                vehicleNumber.text.trim().isEmpty) {
       setState(() => error = 'Please complete all required fields.');
       return;
     }
@@ -170,7 +169,7 @@ class _PartnerRegistrationPageState extends State<PartnerRegistrationPage> {
         'phone': mobile.text.trim(),
         'mobileNumber': mobile.text.trim(),
         'address': address.text.trim(),
-        'vehicleType': vehicleType.text.trim().toLowerCase(),
+        'vehicleType': vehicleType,
         'vehicleNumber': vehicleNumber.text.trim().toUpperCase(),
         'profilePhotoUrl': widget.user.photoURL,
         'approvalStatus': 'pending',
@@ -213,7 +212,24 @@ class _PartnerRegistrationPageState extends State<PartnerRegistrationPage> {
           field(name, 'Full name'),
           field(mobile, 'Mobile number', keyboard: TextInputType.phone),
           field(address, 'Address'),
-          field(vehicleType, 'Vehicle type'),
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: DropdownButtonFormField<String>(
+              value: vehicleType,
+              decoration: const InputDecoration(
+                labelText: 'Vehicle type',
+                border: OutlineInputBorder(),
+              ),
+              items: const [
+                DropdownMenuItem(value: 'bike', child: Text('Bike')),
+                DropdownMenuItem(value: 'auto', child: Text('Auto')),
+                DropdownMenuItem(value: 'car', child: Text('Car')),
+              ],
+              onChanged: (value) {
+                if (value != null) setState(() => vehicleType = value);
+              },
+            ),
+          ),
           field(vehicleNumber, 'Vehicle number'),
           if (error != null)
             Padding(
