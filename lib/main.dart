@@ -429,25 +429,94 @@ class _DeliveryShellState extends State<DeliveryShell>{
     if(mounted)setState(()=>online=value);
   }
   Future<void> _accept(QueryDocumentSnapshot<Map<String,dynamic>> doc) async {
-    try{
-      await FirebaseFirestore.instance.runTransaction((tx)async{
-        final latest=await tx.get(doc.reference);final x=latest.data()??{};
-        if((x['carrierUid']??x['deliveryPartnerUid']??'').toString().isNotEmpty)throw Exception('This order is already assigned.');
-        final status=(x['status']??'').toString().toLowerCase();
-        if(status=='delivered'||status=='cancelled')throw Exception('This order is no longer available.');
-        final profile=await tx.get(FirebaseFirestore.instance.collection('deliveryPartners').doc(widget.user.uid));
-        final p=profile.data()??{};
-        tx.update(doc.reference,{'carrierUid':widget.user.uid,'deliveryPartnerUid':widget.user.uid,'carrierName':p['name']??p['displayName']??'ALLways Delivery Partner','carrierPhone':p['phone']??p['mobileNumber']??widget.user.phoneNumber??'','status':'Assigned','carrierAccepted':true,'assignedAt':FieldValue.serverTimestamp(),'updatedAt':FieldValue.serverTimestamp()});
+    try {
+      await FirebaseFirestore.instance.runTransaction((tx) async {
+        final latest = await tx.get(doc.reference);
+        final x = latest.data() ?? {};
+        final assigned = (x['carrierUid'] ?? '').toString();
+        if (assigned != widget.user.uid) throw Exception('This delivery is not assigned to you.');
+        if ((x['status'] ?? '').toString().toLowerCase() != 'pending_acceptance') {
+          throw Exception('This delivery is no longer awaiting acceptance.');
+        }
+        final profile = await tx.get(
+          FirebaseFirestore.instance.collection('deliveryPartners').doc(widget.user.uid),
+        );
+        final p = profile.data() ?? {};
+        tx.update(doc.reference, {
+          'carrierUid': widget.user.uid,
+          'assignedPartnerId': widget.user.uid,
+          'carrierName': p['name'] ?? p['displayName'] ?? 'ALLways Delivery Partner',
+          'carrierPhone': p['phone'] ?? p['mobileNumber'] ?? widget.user.phoneNumber ?? '',
+          'carrierAccepted': true,
+          'assignmentRejected': false,
+          'status': 'Assigned',
+          'statusNote': 'Accepted by delivery partner',
+          'acceptedAt': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+        tx.set(
+          profile.reference,
+          {
+            'pendingOrderId': null,
+            'currentOrderId': doc.id,
+            'availableForDeliveries': false,
+            'dutyStatus': 'on_delivery',
+            'updatedAt': FieldValue.serverTimestamp(),
+          },
+          SetOptions(merge: true),
+        );
       });
-      if(mounted){setState(()=>selectedId=doc.id);ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Order accepted.')));}
-    }catch(e){if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text(e.toString().replaceFirst('Exception: ',''))));}
+      if (mounted) {
+        setState(() => selectedId = doc.id);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Order accepted.')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))),
+        );
+      }
+    }
   }
+
+  Future<void> _reject(QueryDocumentSnapshot<Map<String,dynamic>> doc) async {
+    try {
+      final x = doc.data();
+      if ((x['carrierUid'] ?? '').toString() != widget.user.uid) {
+        throw Exception('This delivery is not assigned to you.');
+      }
+      await doc.reference.update({
+        'carrierUid': null,
+        'assignedPartnerId': null,
+        'carrierAccepted': false,
+        'assignmentRejected': true,
+        'status': 'unassigned',
+        'statusNote': 'Rejected by delivery partner',
+        'rejectedAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Delivery offer rejected. Admin can reassign it.')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not reject: '+e.toString().replaceFirst('Exception: ', ''))),
+        );
+      }
+    }
+  }
+
   Future<void> _status(DocumentReference ref,String value) async {try{await ref.update({'status':value,'updatedAt':FieldValue.serverTimestamp(),'statusNote':'Updated by ALLways Delivery Partner'});}catch(e){if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text('Update failed: '+e.toString())));}}
   Future<void> _call(String phone)async{final p=phone.replaceAll(RegExp(r'[^0-9+]'),'');if(p.isNotEmpty)await launchUrl(Uri(scheme:'tel',path:p),mode:LaunchMode.externalApplication);}
   Future<void> _sos()async{await FirebaseFirestore.instance.collection('sosAlerts').add({'uid':widget.user.uid,'role':'delivery_partner','createdAt':FieldValue.serverTimestamp(),'status':'open'});if(mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('SOS alert sent to ALLways operations.')));}
   @override Widget build(BuildContext context){
     final pages=[
-      DeliveryHome(online:online,position:position,onOnline:_setOnline,onAccept:_accept,onSelect:(id)=>setState(()=>selectedId=id)),
+      DeliveryHome(userUid:widget.user.uid,online:online,position:position,onOnline:_setOnline,onAccept:_accept,onReject:_reject,onSelect:(id)=>setState(()=>selectedId=id)),
       DeliveryOrders(user:widget.user,onStatus:_status,onSelect:(id)=>setState(()=>selectedId=id),onCall:_call),
       DeliveryMap(user:widget.user,selectedId:selectedId,position:position),
       Earnings(user:widget.user),
@@ -467,38 +536,84 @@ class _DeliveryShellState extends State<DeliveryShell>{
 }
 
 class DeliveryHome extends StatelessWidget{
-  final bool online;final Position? position;final Future<void> Function(bool) onOnline;final Future<void> Function(QueryDocumentSnapshot<Map<String,dynamic>>) onAccept;final void Function(String) onSelect;
-  const DeliveryHome({super.key,required this.online,required this.position,required this.onOnline,required this.onAccept,required this.onSelect});
-  double n(dynamic v)=>v is num?v.toDouble():double.tryParse((v??'').toString())??0;
-  @override Widget build(BuildContext c)=>ListView(padding:const EdgeInsets.fromLTRB(16,18,16,28),children:[
-    Row(children:[const Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text('ALLways Delivery',style:TextStyle(fontSize:24,fontWeight:FontWeight.w900)),SizedBox(height:3),Text('Nearby orders and live delivery work',style:TextStyle(color:Colors.grey))])),Switch(value:online,onChanged:onOnline)]),
-    const SizedBox(height:12),
-    Card(color:blue.withOpacity(.07),shape:RoundedRectangleBorder(borderRadius:BorderRadius.circular(22)),child:Padding(padding:const EdgeInsets.all(16),child:Row(children:[CircleAvatar(radius:26,backgroundColor:blue.withOpacity(.12),child:Icon(online?Icons.wifi_tethering:Icons.wifi_off,color:blue)),const SizedBox(width:12),Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text(online?'You are online':'You are offline',style:const TextStyle(fontSize:18,fontWeight:FontWeight.w900)),Text(online?'New delivery work can be assigned.':'Turn on duty status to receive nearby work.',style:const TextStyle(color:Colors.grey))]))]))),
-    const SizedBox(height:16),
-    StreamBuilder<QuerySnapshot<Map<String,dynamic>>>(
-      stream:FirebaseFirestore.instance.collection('orders').snapshots(),
-      builder:(context,s){
-        if(!s.hasData)return const Card(child:Padding(padding:EdgeInsets.all(24),child:Center(child:CircularProgressIndicator())));
-        if(!online||position==null)return Card(child:Padding(padding:const EdgeInsets.all(24),child:Center(child:Text(online?'Waiting for live location...':'Go online to view nearby delivery requests.'))));
-        final list=<QueryDocumentSnapshot<Map<String,dynamic>>>[];
-        for(final d in s.data!.docs){
-          final x=d.data();final assigned=(x['carrierUid']??x['deliveryPartnerUid']??'').toString();final status=(x['status']??'').toString().toLowerCase();
-          final lat=n(x['customerLatitude']??x['pickupLatitude']??x['pickupLat']);final lng=n(x['customerLongitude']??x['pickupLongitude']??x['pickupLng']);
-          if(assigned.isNotEmpty||status=='delivered'||status=='cancelled'||lat==0||lng==0)continue;
-          if(Geolocator.distanceBetween(position!.latitude,position!.longitude,lat,lng)<=7000)list.add(d);
-        }
-        if(list.isEmpty)return const Card(child:Padding(padding:EdgeInsets.all(24),child:Center(child:Text('No nearby delivery requests within 7 km.'))));
-        return Column(children:list.map((d){
-          final x=d.data();final km=Geolocator.distanceBetween(position!.latitude,position!.longitude,n(x['customerLatitude']??x['pickupLatitude']??x['pickupLat']),n(x['customerLongitude']??x['pickupLongitude']??x['pickupLng']))/1000;
-          return Card(margin:const EdgeInsets.only(bottom:10),child:Padding(padding:const EdgeInsets.all(14),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
-            Row(children:[const CircleAvatar(backgroundColor:Color(0x1A1565C0),child:Icon(Icons.inventory_2_outlined,color:blue)),const SizedBox(width:10),Expanded(child:Text('#'+(x['id']??d.id).toString(),style:const TextStyle(fontWeight:FontWeight.w900))),Text(km.toStringAsFixed(1)+' km',style:const TextStyle(color:blue,fontWeight:FontWeight.w800))]),
-            const SizedBox(height:8),Text((x['name']??x['customerName']??'Customer').toString(),style:const TextStyle(fontWeight:FontWeight.w700)),Text((x['address']??'Pickup address unavailable').toString(),maxLines:2,overflow:TextOverflow.ellipsis),const SizedBox(height:8),Text('₹'+n(x['total']).toStringAsFixed(0),style:const TextStyle(fontSize:18,fontWeight:FontWeight.w900)),
-            const SizedBox(height:10),Row(children:[Expanded(child:OutlinedButton(onPressed:()=>onSelect(d.id),child:const Text('View map'))),const SizedBox(width:8),Expanded(child:FilledButton(onPressed:()=>onAccept(d),style:FilledButton.styleFrom(backgroundColor:blue),child:const Text('Accept')))]),
-          ])));
-        }).toList());
-      },
-    ),
-  ]);
+  final bool online;
+  final Position? position;
+  final String userUid;
+  final Future<void> Function(bool) onOnline;
+  final Future<void> Function(QueryDocumentSnapshot<Map<String,dynamic>>) onAccept;
+  final Future<void> Function(QueryDocumentSnapshot<Map<String,dynamic>>) onReject;
+  final void Function(String) onSelect;
+
+  const DeliveryHome({
+    super.key,
+    required this.online,
+    required this.position,
+    required this.userUid,
+    required this.onOnline,
+    required this.onAccept,
+    required this.onReject,
+    required this.onSelect,
+  });
+
+  @override
+  Widget build(BuildContext c)=>ListView(
+    padding:const EdgeInsets.fromLTRB(16,18,16,28),
+    children:[
+      Row(children:[
+        const Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+          Text('ALLways Delivery',style:TextStyle(fontSize:24,fontWeight:FontWeight.w900)),
+          SizedBox(height:3),
+          Text('Assigned delivery work and live delivery status',style:TextStyle(color:Colors.grey)),
+        ])),
+        Switch(value:online,onChanged:onOnline),
+      ]),
+      const SizedBox(height:12),
+      Card(
+        color:blue.withOpacity(.07),
+        shape:RoundedRectangleBorder(borderRadius:BorderRadius.circular(22)),
+        child:Padding(
+          padding:const EdgeInsets.all(16),
+          child:Row(children:[
+            CircleAvatar(radius:26,backgroundColor:blue.withOpacity(.12),child:Icon(online?Icons.wifi_tethering:Icons.wifi_off,color:blue)),
+            const SizedBox(width:12),
+            Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+              Text(online?'You are online':'You are offline',style:const TextStyle(fontSize:18,fontWeight:FontWeight.w900)),
+              const Text('Orders are assigned by ALLways Admin.',style:TextStyle(color:Colors.grey)),
+            ])),
+          ]),
+        ),
+      ),
+      const SizedBox(height:16),
+      StreamBuilder<QuerySnapshot<Map<String,dynamic>>>(
+        stream:FirebaseFirestore.instance.collection('orders').where('carrierUid',isEqualTo:userUid).snapshots(),
+        builder:(context,s){
+          if(s.hasError)return Card(child:Padding(padding:const EdgeInsets.all(20),child:Text('Could not load assigned offers: '+s.error.toString())));
+          if(!s.hasData)return const Card(child:Padding(padding:EdgeInsets.all(24),child:Center(child:CircularProgressIndicator())));
+          final offers=s.data!.docs.where((d)=>(d.data()['status']??'').toString().toLowerCase()=='pending_acceptance').toList();
+          if(offers.isEmpty)return const Card(child:Padding(padding:EdgeInsets.all(24),child:Center(child:Text('No pending delivery assignments.'))));
+          return Column(children:offers.map((d){
+            final x=d.data();
+            return Card(margin:const EdgeInsets.only(bottom:10),child:Padding(padding:const EdgeInsets.all(14),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+              Text('#'+(x['id']??d.id).toString(),style:const TextStyle(fontWeight:FontWeight.w900)),
+              const SizedBox(height:7),
+              Text((x['name']??x['customerName']??'Customer').toString(),style:const TextStyle(fontWeight:FontWeight.w700)),
+              Text((x['address']??'Address unavailable').toString(),maxLines:2,overflow:TextOverflow.ellipsis),
+              const SizedBox(height:8),
+              Text('₹'+(x['total']??0).toString(),style:const TextStyle(fontSize:18,fontWeight:FontWeight.w900)),
+              const SizedBox(height:10),
+              Row(children:[
+                Expanded(child:OutlinedButton(onPressed:()=>onReject(d),child:const Text('Reject'))),
+                const SizedBox(width:8),
+                Expanded(child:OutlinedButton(onPressed:()=>onSelect(d.id),child:const Text('View map'))),
+                const SizedBox(width:8),
+                Expanded(child:FilledButton(onPressed:()=>onAccept(d),style:FilledButton.styleFrom(backgroundColor:blue),child:const Text('Accept'))),
+              ]),
+            ])));
+          }).toList());
+        },
+      ),
+    ],
+  );
 }
 
 class DeliveryOrders extends StatelessWidget{
