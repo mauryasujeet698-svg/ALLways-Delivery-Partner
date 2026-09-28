@@ -643,27 +643,49 @@ class DeliveryOrders extends StatelessWidget{
   );
 }
 
-class DeliveryMap extends StatelessWidget{
+class DeliveryMap extends StatefulWidget{
   final User user;final String? selectedId;final Position? position;
   const DeliveryMap({super.key,required this.user,required this.selectedId,required this.position});
-  double n(dynamic v)=>v is num?v.toDouble():double.tryParse((v??'').toString())??0;
-  @override Widget build(BuildContext c)=>StreamBuilder<QuerySnapshot<Map<String,dynamic>>>(
-    stream:FirebaseFirestore.instance.collection('orders').where('carrierUid',isEqualTo:user.uid).snapshots(),
-    builder:(context,s){
-      QueryDocumentSnapshot<Map<String,dynamic>>? chosen;
-      for(final d in s.data?.docs??const <QueryDocumentSnapshot<Map<String,dynamic>>>[])if(selectedId==d.id)chosen=d;
-      chosen??=(s.data?.docs.isNotEmpty==true?s.data!.docs.first:null);
-      final x=chosen?.data();final lat=n(x?['customerLatitude']??x?['destinationLatitude']);final lng=n(x?['customerLongitude']??x?['destinationLongitude']);
-      final center=position==null?const LatLng(25.4358,81.8463):LatLng(position!.latitude,position!.longitude);
-      final markers=<Marker>[if(position!=null)Marker(point:center,width:54,height:54,child:const Pin(color:blue,icon:Icons.local_shipping)),if(lat!=0&&lng!=0)Marker(point:LatLng(lat,lng),width:54,height:54,child:const Pin(color:Colors.red,icon:Icons.location_on))];
-      return Stack(children:[
-        FlutterMap(options:MapOptions(initialCenter:center,initialZoom:15),children:[TileLayer(urlTemplate:'https://tile.openstreetmap.org/{z}/{x}/{y}.png',maxZoom:19,userAgentPackageName:'com.allways.delivery'),MarkerLayer(markers:markers)]),
-        Positioned(top:14,left:14,right:14,child:SafeArea(bottom:false,child:Card(child:Padding(padding:const EdgeInsets.all(13),child:Row(children:[const Icon(Icons.location_searching,color:blue),const SizedBox(width:9),Expanded(child:Text(chosen==null?'Live delivery map':'Tracking order #'+chosen.id,style:const TextStyle(fontWeight:FontWeight.w800)))]))))),
-      ]);
-    },
-  );
+  @override State<DeliveryMap> createState()=>_DeliveryMapState();
 }
 
+class _DeliveryMapState extends State<DeliveryMap>{
+  final MapController _map=MapController();
+  List<LatLng> route=[];List<Map<String,dynamic>> steps=[];double? routeDistance,routeDuration;String? loadedId;bool loading=false;
+  double n(dynamic v)=>v is num?v.toDouble():double.tryParse((v??'').toString())??0;
+  LatLng? point(dynamic a,dynamic b){final x=n(a),y=n(b);return x==0||y==0?null:LatLng(x,y);}
+  @override void didUpdateWidget(covariant DeliveryMap old){super.didUpdateWidget(old);if(widget.selectedId!=old.selectedId)load();}
+  @override void initState(){super.initState();WidgetsBinding.instance.addPostFrameCallback((_){load();});}
+  Future<void> load()async{
+    final id=widget.selectedId;if(id==null||id.isEmpty)return;
+    try{
+      final snap=await FirebaseFirestore.instance.collection('orders').doc(id).get();final x=snap.data()??{};
+      final target=point(x['customerLatitude']??x['destinationLatitude']??x['latitude'],x['customerLongitude']??x['destinationLongitude']??x['longitude']);
+      final start=widget.position==null?null:LatLng(widget.position!.latitude,widget.position!.longitude);
+      if(start==null||target==null)return;loading=true;if(mounted)setState((){});
+      final url=Uri.parse('https://router.project-osrm.org/route/v1/driving/\${start.longitude},\${start.latitude};\${target.longitude},\${target.latitude}?overview=full&geometries=geojson&steps=true');
+      final res=await http.get(url);if(res.statusCode!=200)return;
+      final body=jsonDecode(res.body),routes=body['routes'];if(routes is! List||routes.isEmpty)return;final r=routes.first;
+      final coords=r['geometry']?['coordinates'];
+      final pts=coords is List?coords.whereType<List>().where((q)=>q.length>=2).map((q)=>LatLng((q[1] as num).toDouble(),(q[0] as num).toDouble())).toList():<LatLng>[];
+      final ss=<Map<String,dynamic>>[];final legs=r['legs'];
+      if(legs is List)for(final leg in legs){final raw=leg['steps'];if(raw is! List)continue;for(final step in raw){final m=step['maneuver'] is Map?Map<String,dynamic>.from(step['maneuver']):<String,dynamic>{};ss.add({'instruction':(m['type']??'continue').toString()=='arrive'?'You have arrived':(m['modifier']??'Continue straight').toString().replaceAll('_',' '),'road':(step['name']??'').toString(),'distance':step['distance'] is num?(step['distance'] as num).toDouble():0});}}
+      if(mounted)setState((){route=pts;steps=ss;routeDistance=r['distance'] is num?(r['distance'] as num).toDouble():null;routeDuration=r['duration'] is num?(r['duration'] as num).toDouble():null;loadedId=id;});
+    }catch(_){}finally{loading=false;if(mounted)setState((){});}
+  }
+  Widget pin(Color c,IconData i)=>Container(decoration:BoxDecoration(color:c,shape:BoxShape.circle,border:Border.all(color:Colors.white,width:4),boxShadow:const[BoxShadow(color:Colors.black26,blurRadius:6)]),child:Icon(i,color:Colors.white,size:25));
+  @override Widget build(BuildContext c)=>StreamBuilder<DocumentSnapshot<Map<String,dynamic>>>(stream:widget.selectedId==null?null:FirebaseFirestore.instance.collection('orders').doc(widget.selectedId).snapshots(),builder:(context,s){
+    final x=s.data?.data()??{};final target=point(x['customerLatitude']??x['destinationLatitude']??x['latitude'],x['customerLongitude']??x['destinationLongitude']??x['longitude']);final me=widget.position==null?null:LatLng(widget.position!.latitude,widget.position!.longitude);
+    final center=me??target??const LatLng(25.4358,81.8463);
+    final markers=<Marker>[if(me!=null)Marker(point:me,width:56,height:56,child:pin(blue,Icons.local_shipping)),if(target!=null)Marker(point:target,width:56,height:56,child:pin(Colors.red,Icons.person))];
+    final d=me!=null&&target!=null?Geolocator.distanceBetween(me.latitude,me.longitude,target.latitude,target.longitude):null;
+    return Stack(children:[FlutterMap(mapController:_map,options:MapOptions(initialCenter:center,initialZoom:15),children:[TileLayer(urlTemplate:'https://tile.openstreetmap.org/{z}/{x}/{y}.png',maxZoom:19,userAgentPackageName:'com.allways.delivery'),if(route.isNotEmpty)PolylineLayer(polylines:[Polyline(points:route,color:blue,strokeWidth:6)]),MarkerLayer(markers:markers)]),
+      Positioned(top:12,left:12,right:12,child:SafeArea(bottom:false,child:Card(color:const Color(0xFFFDECEF),child:Padding(padding:const EdgeInsets.all(13),child:Row(children:[const Icon(Icons.circle,color:Colors.green,size:12),const SizedBox(width:8),Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[const Text('Live delivery navigation',style:TextStyle(fontWeight:FontWeight.w900)),Text(d==null?'Waiting for live location':(d<1000?d.round().toString()+' m from customer':(d/1000).toStringAsFixed(1)+' km from customer'),style:const TextStyle(color:Colors.grey,fontSize:12))]))]))))),
+      if(steps.isNotEmpty)Positioned(top:86,left:12,right:12,child:Card(child:Padding(padding:const EdgeInsets.all(14),child:Row(children:[Container(width:48,height:48,alignment:Alignment.center,decoration:BoxDecoration(color:blue,borderRadius:BorderRadius.circular(14)),child:const Icon(Icons.navigation,color:Colors.white,size:27)),const SizedBox(width:12),Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text('Next turn',style:TextStyle(fontSize:17,fontWeight:FontWeight.w900)),Text('Follow the highlighted route',style:TextStyle(color:Colors.grey))]))])))),
+      Positioned(left:12,right:12,bottom:18,child:SafeArea(top:false,child:Card(child:Padding(padding:const EdgeInsets.all(14),child:Row(children:[Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[const Text('Customer delivery',style:TextStyle(fontWeight:FontWeight.w900,fontSize:16)),if(routeDistance!=null)Text((routeDistance!<1000?routeDistance!.round().toString()+' m':(routeDistance!/1000).toStringAsFixed(1)+' km')+' route • ETA '+((routeDuration??0)/60).ceil().toString()+' min',style:const TextStyle(color:Colors.grey))])),if(widget.selectedId!=null)IconButton(onPressed:load,icon:const Icon(Icons.refresh))]))))),
+    ]);
+  });
+}
 class Pin extends StatelessWidget{final Color color;final IconData icon;const Pin({super.key,required this.color,required this.icon});@override Widget build(BuildContext c)=>Container(decoration:BoxDecoration(color:color,shape:BoxShape.circle,border:Border.all(color:Colors.white,width:4),boxShadow:const[BoxShadow(color:Colors.black26,blurRadius:6)]),child:Icon(icon,color:Colors.white,size:25));}
 
 class Earnings extends StatelessWidget{
