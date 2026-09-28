@@ -346,6 +346,13 @@ class _DeliveryShellState extends State<DeliveryShell>{
     }catch(_){}
   }
   Future<void> _setOnline(bool value) async {
+    if (value) {
+      final profile = await FirebaseFirestore.instance.collection('deliveryPartners').doc(widget.user.uid).get();
+      final approval = (profile.data()?['approvalStatus'] ?? '').toString().toLowerCase();
+      if (approval.isNotEmpty && approval != 'approved') {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Admin approval is required before going online.')));
+        return;
+      }
     if(value&&!await _locationPermission()){if(mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Location permission is required before going online.')));return;}
     if(value)await _startLocation();else await locationSub?.cancel();
     final data={'status':value?'online':'offline','dutyStatus':value?'online':'offline','availableForDeliveries':value,'statusUpdatedAt':FieldValue.serverTimestamp()};
