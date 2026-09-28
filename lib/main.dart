@@ -370,6 +370,8 @@ class _DeliveryShellState extends State<DeliveryShell>{
     try{
       final c=await FirebaseFirestore.instance.collection('deliveryPartners').doc(widget.user.uid).get();
       online=((c.data()?['dutyStatus']??c.data()?['status']??'offline').toString().toLowerCase()=='online');
+      selectedId=(c.data()?['currentOrderId']??c.data()?['pendingOrderId']??'').toString();
+      if(selectedId!=null&&selectedId!.isEmpty)selectedId=null;
       if(online)await _startLocation();
     }catch(_){}
     if(mounted)setState((){});
