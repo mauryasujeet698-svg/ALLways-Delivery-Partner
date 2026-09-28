@@ -379,17 +379,47 @@ class _DeliveryShellState extends State<DeliveryShell>{
   }
   Future<void> _accept(QueryDocumentSnapshot<Map<String,dynamic>> doc) async {
     try{
+      final partnerRef=FirebaseFirestore.instance.collection('deliveryPartners').doc(widget.user.uid);
       await FirebaseFirestore.instance.runTransaction((tx)async{
-        final latest=await tx.get(doc.reference);final x=latest.data()??{};
-        if((x['carrierUid']??x['deliveryPartnerUid']??'').toString().isNotEmpty)throw Exception('This order is already assigned.');
+        final latest=await tx.get(doc.reference);
+        final partner=await tx.get(partnerRef);
+        final x=latest.data()??{};
+        final p=partner.data()??{};
+        if((x['carrierUid']??x['deliveryPartnerUid']??'').toString().isNotEmpty){
+          throw Exception('This order is already assigned.');
+        }
         final status=(x['status']??'').toString().toLowerCase();
-        if(status=='delivered'||status=='cancelled')throw Exception('This order is no longer available.');
-        final profile=await tx.get(FirebaseFirestore.instance.collection('customers').doc(widget.user.uid));
-        final p=profile.data()??{};
-        tx.update(doc.reference,{'carrierUid':widget.user.uid,'deliveryPartnerUid':widget.user.uid,'carrierName':p['name']??p['displayName']??'ALLways Delivery Partner','carrierPhone':p['phone']??p['mobileNumber']??widget.user.phoneNumber??'','status':'Assigned','carrierAccepted':true,'assignedAt':FieldValue.serverTimestamp(),'updatedAt':FieldValue.serverTimestamp()});
+        if(status=='delivered'||status=='cancelled'){
+          throw Exception('This order is no longer available.');
+        }
+        final approval=(p['approvalStatus']??'').toString().toLowerCase();
+        final duty=(p['status']??'').toString().toLowerCase();
+        if(approval!='approved'||duty!='online'){
+          throw Exception('You must be approved and online to accept an order.');
+        }
+        tx.update(doc.reference,{
+          'carrierUid':widget.user.uid,
+          'deliveryPartnerUid':widget.user.uid,
+          'carrierName':p['name']??p['displayName']??'ALLways Delivery Partner',
+          'carrierPhone':p['phone']??p['mobileNumber']??widget.user.phoneNumber??'',
+          'carrierVehicleType':p['vehicleType']??'bike',
+          'status':'Assigned',
+          'carrierAccepted':true,
+          'assignedAt':FieldValue.serverTimestamp(),
+          'updatedAt':FieldValue.serverTimestamp(),
+        });
       });
-      if(mounted){setState(()=>selectedId=doc.id);ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Order accepted.')));}
-    }catch(e){if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text(e.toString().replaceFirst('Exception: ',''))));}
+      if(mounted){
+        setState(()=>selectedId=doc.id);
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Order accepted.')));
+      }
+    }catch(e){
+      if(mounted){
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content:Text(e.toString().replaceFirst('Exception: ',''))),
+        );
+      }
+    }
   }
   Future<void> _status(DocumentReference ref,String value) async {try{await ref.update({'status':value,'updatedAt':FieldValue.serverTimestamp(),'statusNote':'Updated by ALLways Delivery Partner'});}catch(e){if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text('Update failed: '+e.toString())));}}
   Future<void> _call(String phone)async{final p=phone.replaceAll(RegExp(r'[^0-9+]'),'');if(p.isNotEmpty)await launchUrl(Uri(scheme:'tel',path:p),mode:LaunchMode.externalApplication);}
@@ -425,7 +455,7 @@ class DeliveryHome extends StatelessWidget{
     Card(color:blue.withOpacity(.07),shape:RoundedRectangleBorder(borderRadius:BorderRadius.circular(22)),child:Padding(padding:const EdgeInsets.all(16),child:Row(children:[CircleAvatar(radius:26,backgroundColor:blue.withOpacity(.12),child:Icon(online?Icons.wifi_tethering:Icons.wifi_off,color:blue)),const SizedBox(width:12),Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text(online?'You are online':'You are offline',style:const TextStyle(fontSize:18,fontWeight:FontWeight.w900)),Text(online?'New delivery work can be assigned.':'Turn on duty status to receive nearby work.',style:const TextStyle(color:Colors.grey))]))]))),
     const SizedBox(height:16),
     StreamBuilder<QuerySnapshot<Map<String,dynamic>>>(
-      stream:FirebaseFirestore.instance.collection('orders').snapshots(),
+      stream:FirebaseFirestore.instance.collection('orders').where('carrierUid',isNull:true).snapshots(),
       builder:(context,s){
         if(!s.hasData)return const Card(child:Padding(padding:EdgeInsets.all(24),child:Center(child:CircularProgressIndicator())));
         if(!online||position==null)return Card(child:Padding(padding:const EdgeInsets.all(24),child:Center(child:Text(online?'Waiting for live location...':'Go online to view nearby delivery requests.'))));
