@@ -13,6 +13,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'account_theme.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 const blue=Color(0xFF1565C0), bg=Color(0xFFF7F8FB);
@@ -26,13 +27,16 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
   await GoogleSignIn.instance.initialize();
+  await appThemeController.load();
   FirebaseMessaging.onBackgroundMessage(_background);
   runApp(const AllwaysDeliveryApp());
 }
 
 class AllwaysDeliveryApp extends StatelessWidget {
   const AllwaysDeliveryApp({super.key});
-  @override Widget build(BuildContext context)=>MaterialApp(
+  @override Widget build(BuildContext context)=>ValueListenableBuilder<ThemeMode>(
+    valueListenable:appThemeController,
+    builder:(context,mode,_)=>MaterialApp(
     debugShowCheckedModeBanner:false,
     title:'ALLways Delivery Partner',
     theme:ThemeData(
@@ -42,7 +46,10 @@ class AllwaysDeliveryApp extends StatelessWidget {
       textTheme:GoogleFonts.poppinsTextTheme(),
       cardTheme:const CardThemeData(color:Colors.white,elevation:0,margin:EdgeInsets.zero),
     ),
+    themeMode:mode,
+    darkTheme:ThemeData(useMaterial3:true,colorScheme:ColorScheme.fromSeed(seedColor:blue,brightness:Brightness.dark),textTheme:GoogleFonts.poppinsTextTheme(ThemeData.dark().textTheme)),
     home:const AuthGate(),
+  ),
   );
 }
 
@@ -56,6 +63,7 @@ class AuthGate extends StatelessWidget{
    final p=a.data!.data()??{};final approval=(p['approvalStatus']??'').toString().toLowerCase();
    if(approval=='pending')return PendingApprovalPage(user:s.data!,rejected:false);
    if(approval=='rejected')return PendingApprovalPage(user:s.data!,rejected:true,reason:(p['rejectionReason']??'').toString());
+   if(approval=='suspended')return PendingApprovalPage(user:s.data!,rejected:true,reason:(p['suspensionReason']??'Account suspended by Admin.').toString());
    return DeliveryShell(user:s.data!);
   });
  });
@@ -427,7 +435,7 @@ class _DeliveryShellState extends State<DeliveryShell>{
         if((x['carrierUid']??x['deliveryPartnerUid']??'').toString().isNotEmpty)throw Exception('This order is already assigned.');
         final status=(x['status']??'').toString().toLowerCase();
         if(status=='delivered'||status=='cancelled')throw Exception('This order is no longer available.');
-        final profile=await tx.get(FirebaseFirestore.instance.collection('customers').doc(widget.user.uid));
+        final profile=await tx.get(FirebaseFirestore.instance.collection('deliveryPartners').doc(widget.user.uid));
         final p=profile.data()??{};
         tx.update(doc.reference,{'carrierUid':widget.user.uid,'deliveryPartnerUid':widget.user.uid,'carrierName':p['name']??p['displayName']??'ALLways Delivery Partner','carrierPhone':p['phone']??p['mobileNumber']??widget.user.phoneNumber??'','status':'Assigned','carrierAccepted':true,'assignedAt':FieldValue.serverTimestamp(),'updatedAt':FieldValue.serverTimestamp()});
       });
@@ -562,6 +570,8 @@ class Profile extends StatelessWidget{
     const Card(child:ListTile(leading:Icon(Icons.description_outlined),title:Text('Documents'),subtitle:Text('Keep vehicle and verification details current.'))),
     const Card(child:ListTile(leading:Icon(Icons.help_outline),title:Text('Help & Support'),subtitle:Text('Contact ALLways operations for delivery issues.'))),
     Card(child:ListTile(leading:const Icon(Icons.sos,color:Colors.red),title:const Text('SOS / Emergency'),subtitle:const Text('Send an alert to ALLways operations.'),onTap:onSos)),
+    Card(child:ListTile(leading:const Icon(Icons.palette_outlined,color:blue),title:const Text('Change Theme'),subtitle:const Text('Light, dark or system default'),trailing:const Icon(Icons.chevron_right),onTap:()=>Navigator.push(c,MaterialPageRoute(builder:(_)=>ThemeSettingsPage(accent:blue))))),
+    Card(child:ListTile(leading:const Icon(Icons.manage_accounts,color:blue),title:const Text('Account Settings'),subtitle:const Text('Login, sign out and account deletion'),trailing:const Icon(Icons.chevron_right),onTap:()=>Navigator.push(c,MaterialPageRoute(builder:(_)=>AccountSettingsPage(user:user,collection:'deliveryPartners',accent:blue,role:'delivery_partner')))),
     Card(child:ListTile(leading:const Icon(Icons.logout),title:const Text('Sign out'),onTap:()=>FirebaseAuth.instance.signOut())),
   ]);
 }
