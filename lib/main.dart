@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -346,7 +347,7 @@ class _DeliveryShellState extends State<DeliveryShell>{
   Future<void> _startLocation() async {
     if(!await _locationPermission())return;
     try{
-      const settings=LocationSettings(accuracy:LocationAccuracy.high,distanceFilter:10);
+      final LocationSettings settings=Platform.isAndroid && online ? AndroidSettings(accuracy:LocationAccuracy.high,distanceFilter:10,intervalDuration:const Duration(seconds:10),foregroundNotificationConfig:const ForegroundNotificationConfig(notificationTitle:'ALLways delivery tracking',notificationText:'ALLways is sharing your location while you are online or on an active delivery.',notificationChannelName:'ALLways Delivery Tracking',enableWakeLock:true,setOngoing:true)) : const LocationSettings(accuracy:LocationAccuracy.high,distanceFilter:10);
       final first=await Geolocator.getCurrentPosition(locationSettings:settings);
       position=first;await _saveLocation(first);
       await locationSub?.cancel();
@@ -355,7 +356,7 @@ class _DeliveryShellState extends State<DeliveryShell>{
   }
   Future<void> _saveLocation(Position p) async {
     try{
-      final data={'deliveryLat':p.latitude,'deliveryLng':p.longitude,'deliveryLocationUpdatedAt':FieldValue.serverTimestamp()};
+      final data={'deliveryLat':p.latitude,'deliveryLng':p.longitude,'lastLat':p.latitude,'lastLng':p.longitude,'deliveryLocationUpdatedAt':FieldValue.serverTimestamp(),'lastLocationAt':FieldValue.serverTimestamp(),'isOnline':online};
       await FirebaseFirestore.instance.collection('customers').doc(widget.user.uid).set(data,SetOptions(merge:true));
       await FirebaseFirestore.instance.collection('deliveryPartners').doc(widget.user.uid).set({...data,'uid':widget.user.uid,'status':online?'online':'offline'},SetOptions(merge:true));
       if(selectedId!=null)await FirebaseFirestore.instance.collection('orders').doc(selectedId).set({'carrierLat':p.latitude,'carrierLng':p.longitude,'carrierLocationUpdatedAt':FieldValue.serverTimestamp()},SetOptions(merge:true));
@@ -374,7 +375,7 @@ class _DeliveryShellState extends State<DeliveryShell>{
     if(value)await _startLocation();else await locationSub?.cancel();
     final data={'status':value?'online':'offline','dutyStatus':value?'online':'offline','availableForDeliveries':value,'statusUpdatedAt':FieldValue.serverTimestamp()};
     await FirebaseFirestore.instance.collection('customers').doc(widget.user.uid).set(data,SetOptions(merge:true));
-    await FirebaseFirestore.instance.collection('deliveryPartners').doc(widget.user.uid).set({...data,'uid':widget.user.uid},SetOptions(merge:true));
+    await FirebaseFirestore.instance.collection('deliveryPartners').doc(widget.user.uid).set({...data,'uid':widget.user.uid,'availableForDeliveries':value,'isOnline':value},SetOptions(merge:true));
     if(mounted)setState(()=>online=value);
   }
   Future<void> _accept(QueryDocumentSnapshot<Map<String,dynamic>> doc) async {
@@ -451,6 +452,8 @@ class DeliveryHome extends StatelessWidget{
   double n(dynamic v)=>v is num?v.toDouble():double.tryParse((v??'').toString())??0;
   @override Widget build(BuildContext c)=>ListView(padding:const EdgeInsets.fromLTRB(16,18,16,28),children:[
     Row(children:[const Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text('ALLways Delivery',style:TextStyle(fontSize:24,fontWeight:FontWeight.w900)),SizedBox(height:3),Text('Nearby orders and live delivery work',style:TextStyle(color:Colors.grey))])),Switch(value:online,onChanged:onOnline)]),
+    const SizedBox(height:8),
+    Card(elevation:0,child:Padding(padding:const EdgeInsets.all(14),child:Row(children:[CircleAvatar(backgroundColor:blue.withOpacity(.10),child:Icon(online?Icons.play_arrow:Icons.pause,color:blue)),const SizedBox(width:10),Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text(online?'You are ready for deliveries':'You are offline',style:const TextStyle(fontWeight:FontWeight.w900)),Text(online?'Next action: accept an order, then Pick Up → Deliver.':'Next action: go online when you are ready to receive work.',style:const TextStyle(color:Colors.grey,fontSize:12))]))]))),
     const SizedBox(height:12),
     Card(color:blue.withOpacity(.07),shape:RoundedRectangleBorder(borderRadius:BorderRadius.circular(22)),child:Padding(padding:const EdgeInsets.all(16),child:Row(children:[CircleAvatar(radius:26,backgroundColor:blue.withOpacity(.12),child:Icon(online?Icons.wifi_tethering:Icons.wifi_off,color:blue)),const SizedBox(width:12),Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text(online?'You are online':'You are offline',style:const TextStyle(fontSize:18,fontWeight:FontWeight.w900)),Text(online?'New delivery work can be assigned.':'Turn on duty status to receive nearby work.',style:const TextStyle(color:Colors.grey))]))]))),
     const SizedBox(height:16),
