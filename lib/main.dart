@@ -511,13 +511,44 @@ class _OrderItemsSheet extends StatelessWidget{
   const _OrderItemsSheet({required this.order});
   num n(dynamic v)=>v is num?v:num.tryParse((v??'').toString())??0;
   @override Widget build(BuildContext context){
-    final raw=order['items'];final items=raw is List?raw.whereType<Map>().map((x)=>Map<String,dynamic>.from(x)).toList():<Map<String,dynamic>>[];
-    return SafeArea(child:Padding(padding:const EdgeInsets.fromLTRB(20,8,20,24),child:Column(mainAxisSize:MainAxisSize.min,crossAxisAlignment:CrossAxisAlignment.start,children:[
-      const Text('Order items',style:TextStyle(fontSize:20,fontWeight:FontWeight.w900)),const SizedBox(height:10),
-      if(items.isEmpty)const Text('No item details were saved with this order.'),
-      ...items.map((x)=>ListTile(dense:true,leading:const Icon(Icons.inventory_2_outlined),title:Text((x['name']??x['title']??'Item').toString(),style:const TextStyle(fontWeight:FontWeight.w700)),subtitle:Text('Qty: '+(x['qty']??x['quantity']??1).toString()),trailing:Text('₹'+n(x['price']).toStringAsFixed(0)))),
-      const Divider(),Align(alignment:Alignment.centerRight,child:Text('Total: ₹'+n(order['total']).toStringAsFixed(0),style:const TextStyle(fontWeight:FontWeight.w900))),
-    ]));
+    final raw=order['items'];
+    final items=raw is List
+        ? raw.whereType<Map>().map((x)=>Map<String,dynamic>.from(x)).toList()
+        : <Map<String,dynamic>>[];
+    return SafeArea(
+      child:Padding(
+        padding:const EdgeInsets.fromLTRB(20,8,20,24),
+        child:Column(
+          mainAxisSize:MainAxisSize.min,
+          crossAxisAlignment:CrossAxisAlignment.start,
+          children:[
+            const Text('Order items',style:TextStyle(fontSize:20,fontWeight:FontWeight.w900)),
+            const SizedBox(height:10),
+            if(items.isEmpty)
+              const Text('No item details were saved with this order.'),
+            for(final x in items)
+              ListTile(
+                dense:true,
+                leading:const Icon(Icons.inventory_2_outlined),
+                title:Text(
+                  (x['name']??x['title']??'Item').toString(),
+                  style:const TextStyle(fontWeight:FontWeight.w700),
+                ),
+                subtitle:Text('Qty: '+(x['qty']??x['quantity']??1).toString()),
+                trailing:Text('₹'+n(x['price']).toStringAsFixed(0)),
+              ),
+            const Divider(),
+            Align(
+              alignment:Alignment.centerRight,
+              child:Text(
+                'Total: ₹'+n(order['total']).toStringAsFixed(0),
+                style:const TextStyle(fontWeight:FontWeight.w900),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 
