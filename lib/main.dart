@@ -333,11 +333,34 @@ class _DeliveryShellState extends State<DeliveryShell>{
       if(p.getBool('notifications_enabled')==false)return;
       final s=await FirebaseMessaging.instance.requestPermission(alert:true,badge:true,sound:true);
       if(s.authorizationStatus==AuthorizationStatus.denied)return;
+      await FirebaseMessaging.instance.setForegroundNotificationPresentationOptions(alert:true,badge:true,sound:true);
       await FirebaseMessaging.instance.subscribeToTopic('all_users');
       await FirebaseMessaging.instance.subscribeToTopic('delivery_partners');
-      final t=await FirebaseMessaging.instance.getToken();
-      if(t!=null&&t.isNotEmpty)await FirebaseFirestore.instance.collection('fcmTokens').doc(widget.user.uid).collection('tokens').doc(t).set({'uid':widget.user.uid,'token':t,'role':'delivery_partner','updatedAt':FieldValue.serverTimestamp()},SetOptions(merge:true));
-    }catch(_){}
+      await p.setBool('notifications_enabled',true);
+
+      Future<void> saveToken(String? t) async {
+        if(t==null||t.isEmpty)return;
+        await FirebaseFirestore.instance.collection('fcmTokens').doc(widget.user.uid).collection('tokens').doc(t).set({
+          'uid':widget.user.uid,
+          'token':t,
+          'role':'delivery_partner',
+          'platform':'mobile',
+          'updatedAt':FieldValue.serverTimestamp(),
+        },SetOptions(merge:true));
+      }
+
+      await saveToken(await FirebaseMessaging.instance.getToken());
+      FirebaseMessaging.instance.onTokenRefresh.listen(saveToken);
+      FirebaseMessaging.onMessage.listen((RemoteMessage message){
+        if(!mounted)return;
+        final title=message.notification?.title??message.data['title']??'ALLways';
+        final body=message.notification?.body??message.data['body']??'';
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content:Text(body.isEmpty?title:'$title: $body'),
+          duration:const Duration(seconds:4),
+        ));
+      });
+    }catch(_){} 
   }
   Future<bool> _locationPermission() async {
     if(!await Geolocator.isLocationServiceEnabled())return false;
