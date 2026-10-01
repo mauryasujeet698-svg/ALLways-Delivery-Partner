@@ -483,6 +483,21 @@ class DeliveryHome extends StatelessWidget{
   ]);
 }
 
+class _OrderItemsSheet extends StatelessWidget{
+  final Map<String,dynamic> order;
+  const _OrderItemsSheet({required this.order});
+  num n(dynamic v)=>v is num?v:num.tryParse((v??'').toString())??0;
+  @override Widget build(BuildContext context){
+    final raw=order['items'];final items=raw is List?raw.whereType<Map>().map((x)=>Map<String,dynamic>.from(x)).toList():<Map<String,dynamic>>[];
+    return SafeArea(child:Padding(padding:const EdgeInsets.fromLTRB(20,8,20,24),child:Column(mainAxisSize:MainAxisSize.min,crossAxisAlignment:CrossAxisAlignment.start,children:[
+      const Text('Order items',style:TextStyle(fontSize:20,fontWeight:FontWeight.w900)),const SizedBox(height:10),
+      if(items.isEmpty)const Text('No item details were saved with this order.'),
+      ...items.map((x)=>ListTile(dense:true,leading:const Icon(Icons.inventory_2_outlined),title:Text((x['name']??x['title']??'Item').toString(),style:const TextStyle(fontWeight:FontWeight.w700)),subtitle:Text('Qty: '+(x['qty']??x['quantity']??1).toString()),trailing:Text('₹'+n(x['price']).toStringAsFixed(0)))),
+      const Divider(),Align(alignment:Alignment.centerRight,child:Text('Total: ₹'+n(order['total']).toStringAsFixed(0),style:const TextStyle(fontWeight:FontWeight.w900))),
+    ]));
+  }
+}
+
 class DeliveryOrders extends StatelessWidget{
   final User user;final Future<void> Function(DocumentReference,String) onStatus;final void Function(String) onSelect;final Future<void> Function(String) onCall;
   const DeliveryOrders({super.key,required this.user,required this.onStatus,required this.onSelect,required this.onCall});
@@ -500,7 +515,7 @@ class DeliveryOrders extends StatelessWidget{
           return Card(margin:const EdgeInsets.only(bottom:10),child:Padding(padding:const EdgeInsets.all(14),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
             Row(children:[Expanded(child:Text('#'+(x['id']??d.id).toString(),style:const TextStyle(fontWeight:FontWeight.w900))),Text('₹'+n(x['total']).toStringAsFixed(0),style:const TextStyle(fontWeight:FontWeight.w900))]),
             const SizedBox(height:7),Text((x['name']??x['customerName']??'Customer').toString(),style:const TextStyle(fontWeight:FontWeight.w700)),Text((x['address']??'Address unavailable').toString(),maxLines:2,overflow:TextOverflow.ellipsis),const SizedBox(height:8),Text(((x['deliveryType']??'instant').toString().toLowerCase()=='scheduled'?'Scheduled delivery':'Instant delivery')+(x['scheduledFor'] is num?' • '+DateTime.fromMillisecondsSinceEpoch((x['scheduledFor'] as num).toInt()).toLocal().toString():'')+' • '+status,style:const TextStyle(color:blue,fontWeight:FontWeight.w800)),
-            const SizedBox(height:10),Row(children:[Expanded(child:OutlinedButton(onPressed:()=>onSelect(d.id),child:const Text('Live map'))),if(phone.isNotEmpty)IconButton(onPressed:()=>onCall(phone),icon:const Icon(Icons.call_outlined))]),
+            const SizedBox(height:10),Row(children:[Expanded(child:OutlinedButton(onPressed:()=>showModalBottomSheet(context:context,showDragHandle:true,builder:(_)=>_OrderItemsSheet(order:x)),child:const Text('View items'))),const SizedBox(width:8),Expanded(child:OutlinedButton(onPressed:()=>onSelect(d.id),child:const Text('Live map'))),if(phone.isNotEmpty)IconButton(onPressed:()=>onCall(phone),icon:const Icon(Icons.call_outlined))]),
             if(status=='Assigned'||status=='pending_acceptance')SizedBox(width:double.infinity,child:FilledButton(onPressed:()=>onStatus(d.reference,'Out for delivery'),style:FilledButton.styleFrom(backgroundColor:blue),child:const Text('Start delivery'))),
             if(status=='Out for delivery')SizedBox(width:double.infinity,child:FilledButton(onPressed:()=>onStatus(d.reference,'Delivered'),style:FilledButton.styleFrom(backgroundColor:Colors.green),child:const Text('Mark delivered'))),
           ])));
