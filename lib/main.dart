@@ -567,7 +567,7 @@ class _DeliveryMapState extends State<DeliveryMap>{
         ),
         Positioned(top:14,left:14,right:14,child:SafeArea(bottom:false,child:Card(child:Padding(padding:const EdgeInsets.all(13),child:Row(children:[
           const Icon(Icons.navigation,color:blue),const SizedBox(width:9),Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
-            Text(chosen==null?'Live delivery map':'Tracking order #'+chosen!.id,style:const TextStyle(fontWeight:FontWeight.w800)),
+            Text(chosen==null?'Live delivery map':'Tracking order #'+chosen.id,style:const TextStyle(fontWeight:FontWeight.w800)),
             if(distance!=null)Text(distance<1000?'Customer • '+distance.round().toString()+' m away':'Customer • '+(distance/1000).toStringAsFixed(1)+' km away',style:const TextStyle(color:Colors.grey,fontSize:12)),
           ])),
         ]))))),
