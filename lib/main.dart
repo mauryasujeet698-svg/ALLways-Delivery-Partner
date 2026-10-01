@@ -510,22 +510,67 @@ class DeliveryOrders extends StatelessWidget{
   );
 }
 
-class DeliveryMap extends StatelessWidget{
+class DeliveryMap extends StatefulWidget{
   final User user;final String? selectedId;final Position? position;
   const DeliveryMap({super.key,required this.user,required this.selectedId,required this.position});
+  @override State<DeliveryMap> createState()=>_DeliveryMapState();
+}
+
+class _DeliveryMapState extends State<DeliveryMap>{
+  final MapController _mapController=MapController();
+  bool _ready=false; DateTime? _lastMove;
   double n(dynamic v)=>v is num?v.toDouble():double.tryParse((v??'').toString())??0;
+
+  void _focus(LatLng me,LatLng? destination){
+    if(!_ready)return;
+    final now=DateTime.now();
+    if(_lastMove!=null&&now.difference(_lastMove!)<const Duration(milliseconds:900))return;
+    if(destination!=null){
+      final meters=Geolocator.distanceBetween(me.latitude,me.longitude,destination.latitude,destination.longitude);
+      final zoom=meters<=30?18.8:meters<=100?18.0:meters<=300?17.0:meters<=1000?15.7:14.5;
+      _mapController.move(LatLng((me.latitude+destination.latitude)/2,(me.longitude+destination.longitude)/2),zoom);
+    }else{
+      _mapController.move(me,16);
+    }
+    _lastMove=now;
+  }
+
   @override Widget build(BuildContext c)=>StreamBuilder<QuerySnapshot<Map<String,dynamic>>>(
-    stream:FirebaseFirestore.instance.collection('orders').where('carrierUid',isEqualTo:user.uid).snapshots(),
+    stream:FirebaseFirestore.instance.collection('orders').where('carrierUid',isEqualTo:widget.user.uid).snapshots(),
     builder:(context,s){
       QueryDocumentSnapshot<Map<String,dynamic>>? chosen;
-      for(final d in s.data?.docs??const <QueryDocumentSnapshot<Map<String,dynamic>>>[])if(selectedId==d.id)chosen=d;
+      for(final d in s.data?.docs??const <QueryDocumentSnapshot<Map<String,dynamic>>>[])if(widget.selectedId==d.id)chosen=d;
       chosen??=(s.data?.docs.isNotEmpty==true?s.data!.docs.first:null);
-      final x=chosen?.data();final lat=n(x?['customerLatitude']??x?['destinationLatitude']);final lng=n(x?['customerLongitude']??x?['destinationLongitude']);
-      final center=position==null?const LatLng(25.4358,81.8463):LatLng(position!.latitude,position!.longitude);
-      final markers=<Marker>[if(position!=null)Marker(point:center,width:54,height:54,child:const Pin(color:blue,icon:Icons.local_shipping)),if(lat!=0&&lng!=0)Marker(point:LatLng(lat,lng),width:54,height:54,child:const Pin(color:Colors.red,icon:Icons.location_on))];
+      final x=chosen?.data();
+      final lat=n(x?['customerLatitude']??x?['destinationLatitude']);
+      final lng=n(x?['customerLongitude']??x?['destinationLongitude']);
+      final me=widget.position==null?null:LatLng(widget.position!.latitude,widget.position!.longitude);
+      final destination=(lat!=0&&lng!=0)?LatLng(lat,lng):null;
+      if(me!=null)WidgetsBinding.instance.addPostFrameCallback((_)=>_focus(me,destination));
+      final distance=me!=null&&destination!=null?Geolocator.distanceBetween(me.latitude,me.longitude,destination.latitude,destination.longitude):null;
+      final markers=<Marker>[
+        if(me!=null)Marker(point:me,width:58,height:58,child:const Pin(color:blue,icon:Icons.local_shipping)),
+        if(destination!=null)Marker(point:destination,width:58,height:58,child:const Pin(color:Colors.red,icon:Icons.location_on)),
+      ];
       return Stack(children:[
-        FlutterMap(options:MapOptions(initialCenter:center,initialZoom:15),children:[TileLayer(urlTemplate:'https://tile.openstreetmap.org/{z}/{x}/{y}.png',maxZoom:19,userAgentPackageName:'com.allways.delivery'),MarkerLayer(markers:markers)]),
-        Positioned(top:14,left:14,right:14,child:SafeArea(bottom:false,child:Card(child:Padding(padding:const EdgeInsets.all(13),child:Row(children:[const Icon(Icons.location_searching,color:blue),const SizedBox(width:9),Expanded(child:Text(chosen==null?'Live delivery map':'Tracking order #'+chosen.id,style:const TextStyle(fontWeight:FontWeight.w800)))]))))),
+        FlutterMap(
+          mapController:_mapController,
+          options:MapOptions(
+            initialCenter:me??const LatLng(25.4358,81.8463),
+            initialZoom:15,
+            onMapReady:(){_ready=true;if(me!=null)_focus(me,destination);},
+          ),
+          children:[
+            TileLayer(urlTemplate:'https://tile.openstreetmap.org/{z}/{x}/{y}.png',maxZoom:19,userAgentPackageName:'com.allways.delivery'),
+            MarkerLayer(markers:markers),
+          ],
+        ),
+        Positioned(top:14,left:14,right:14,child:SafeArea(bottom:false,child:Card(child:Padding(padding:const EdgeInsets.all(13),child:Row(children:[
+          const Icon(Icons.navigation,color:blue),const SizedBox(width:9),Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+            Text(chosen==null?'Live delivery map':'Tracking order #'+chosen!.id,style:const TextStyle(fontWeight:FontWeight.w800)),
+            if(distance!=null)Text(distance<1000?'Customer • '+distance.round().toString()+' m away':'Customer • '+(distance/1000).toStringAsFixed(1)+' km away',style:const TextStyle(color:Colors.grey,fontSize:12)),
+          ])),
+        ]))))),
       ]);
     },
   );
