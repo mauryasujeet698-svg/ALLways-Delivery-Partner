@@ -409,11 +409,12 @@ class _DeliveryShellState extends State<DeliveryShell>{
         final partner=await tx.get(partnerRef);
         final x=latest.data()??{};
         final p=partner.data()??{};
-        if((x['carrierUid']??x['deliveryPartnerUid']??'').toString().isNotEmpty){
+        final assignedToMe=(x['carrierUid']??x['deliveryPartnerUid']??'').toString()==widget.user.uid;
+        if((x['carrierUid']??x['deliveryPartnerUid']??'').toString().isNotEmpty && !assignedToMe){
           throw Exception('This order is already assigned.');
         }
         final status=(x['status']??'').toString().toLowerCase();
-        if(status=='delivered'||status=='cancelled'){
+        if(status=='delivered'||status=='cancelled'||status=='completed'||status=='rejected'||status=='expired'){
           throw Exception('This order is no longer available.');
         }
         final approval=(p['approvalStatus']??'').toString().toLowerCase();
@@ -450,7 +451,7 @@ class _DeliveryShellState extends State<DeliveryShell>{
   Future<void> _sos()async{await FirebaseFirestore.instance.collection('sosAlerts').add({'uid':widget.user.uid,'role':'delivery_partner','createdAt':FieldValue.serverTimestamp(),'status':'open'});if(mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('SOS alert sent to ALLways operations.')));}
   @override Widget build(BuildContext context){
     final pages=[
-      DeliveryHome(online:online,position:position,onOnline:_setOnline,onAccept:_accept,onSelect:(id)=>setState(()=>selectedId=id)),
+      DeliveryHome(online:online,position:position,onOnline:_setOnline,onAccept:_accept,onSelect:(id)=>setState(()=>selectedId=id),widgetUserUid:widget.user.uid),
       DeliveryOrders(user:widget.user,onStatus:_status,onSelect:(id)=>setState(()=>selectedId=id),onCall:_call),
       DeliveryMap(user:widget.user,selectedId:selectedId,position:position),
       Earnings(user:widget.user),
@@ -470,8 +471,8 @@ class _DeliveryShellState extends State<DeliveryShell>{
 }
 
 class DeliveryHome extends StatelessWidget{
-  final bool online;final Position? position;final Future<void> Function(bool) onOnline;final Future<void> Function(QueryDocumentSnapshot<Map<String,dynamic>>) onAccept;final void Function(String) onSelect;
-  const DeliveryHome({super.key,required this.online,required this.position,required this.onOnline,required this.onAccept,required this.onSelect});
+  final bool online;final Position? position;final Future<void> Function(bool) onOnline;final Future<void> Function(QueryDocumentSnapshot<Map<String,dynamic>>) onAccept;final void Function(String) onSelect;final String widgetUserUid;
+  const DeliveryHome({super.key,required this.online,required this.position,required this.onOnline,required this.onAccept,required this.onSelect,required this.widgetUserUid});
   double n(dynamic v)=>v is num?v.toDouble():double.tryParse((v??'').toString())??0;
   @override Widget build(BuildContext c)=>ListView(padding:const EdgeInsets.fromLTRB(16,18,16,28),children:[
     Row(children:[const Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text('ALLways Delivery',style:TextStyle(fontSize:24,fontWeight:FontWeight.w900)),SizedBox(height:3),Text('Nearby orders and live delivery work',style:TextStyle(color:Colors.grey))])),Switch(value:online,onChanged:onOnline)]),
@@ -481,13 +482,17 @@ class DeliveryHome extends StatelessWidget{
     Card(color:blue.withOpacity(.07),shape:RoundedRectangleBorder(borderRadius:BorderRadius.circular(22)),child:Padding(padding:const EdgeInsets.all(16),child:Row(children:[CircleAvatar(radius:26,backgroundColor:blue.withOpacity(.12),child:Icon(online?Icons.wifi_tethering:Icons.wifi_off,color:blue)),const SizedBox(width:12),Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text(online?'You are online':'You are offline',style:const TextStyle(fontSize:18,fontWeight:FontWeight.w900)),Text(online?'New delivery work can be assigned.':'Turn on duty status to receive nearby work.',style:const TextStyle(color:Colors.grey))]))]))),
     const SizedBox(height:16),
     StreamBuilder<QuerySnapshot<Map<String,dynamic>>>(
-      stream:FirebaseFirestore.instance.collection('orders').where('carrierUid',isNull:true).snapshots(),
+      stream:FirebaseFirestore.instance.collection('orders').snapshots(),
       builder:(context,s){
         if(!s.hasData)return const Card(child:Padding(padding:EdgeInsets.all(24),child:Center(child:CircularProgressIndicator())));
         if(!online||position==null)return Card(child:Padding(padding:const EdgeInsets.all(24),child:Center(child:Text(online?'Waiting for live location...':'Go online to view nearby delivery requests.'))));
         final list=<QueryDocumentSnapshot<Map<String,dynamic>>>[];
         for(final d in s.data!.docs){
           final x=d.data();final assigned=(x['carrierUid']??x['deliveryPartnerUid']??'').toString();final status=(x['status']??'').toString().toLowerCase();
+          final assignedToMe=assigned==widgetUserUid;
+          final unassigned=assigned.isEmpty;
+          final pendingAuto=assignedToMe && status=='pending_acceptance';
+          if(!unassigned && !pendingAuto)continue;
           final lat=n(x['customerLatitude']??x['pickupLatitude']??x['pickupLat']);final lng=n(x['customerLongitude']??x['pickupLongitude']??x['pickupLng']);
           if(assigned.isNotEmpty||status=='delivered'||status=='cancelled'||lat==0||lng==0)continue;
           if(Geolocator.distanceBetween(position!.latitude,position!.longitude,lat,lng)<=7000)list.add(d);
