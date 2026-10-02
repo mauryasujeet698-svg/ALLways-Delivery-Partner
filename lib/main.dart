@@ -494,7 +494,7 @@ class DeliveryHome extends StatelessWidget{
           final pendingAuto=assignedToMe && status=='pending_acceptance';
           if(!unassigned && !pendingAuto)continue;
           final lat=n(x['customerLatitude']??x['pickupLatitude']??x['pickupLat']);final lng=n(x['customerLongitude']??x['pickupLongitude']??x['pickupLng']);
-          if(assigned.isNotEmpty||status=='delivered'||status=='cancelled'||lat==0||lng==0)continue;
+          if((assigned.isNotEmpty&&!pendingAuto)||status=='delivered'||status=='cancelled'||status=='completed'||status=='rejected'||status=='expired'||lat==0||lng==0)continue;
           if(Geolocator.distanceBetween(position!.latitude,position!.longitude,lat,lng)<=7000)list.add(d);
         }
         if(list.isEmpty)return const Card(child:Padding(padding:EdgeInsets.all(24),child:Center(child:Text('No nearby delivery requests within 7 km.'))));
