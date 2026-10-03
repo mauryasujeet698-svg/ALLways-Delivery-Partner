@@ -5,6 +5,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
@@ -14,6 +15,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 const blue=Color(0xFF1565C0), bg=Color(0xFFF7F8FB);
+const _mapboxPublicToken = String.fromEnvironment('MAPBOX_PUBLIC_TOKEN');
+String _mapboxTilesUrl() => 'https://api.mapbox.com/styles/v1/mapbox/streets-v12/tiles/256/{z}/{x}/{y}?access_token=' + _mapboxPublicToken;
 
 @pragma('vm:entry-point')
 Future<void> _background(RemoteMessage message) async { await Firebase.initializeApp(); }
@@ -353,6 +356,14 @@ class _DeliveryShellState extends State<DeliveryShell>{
       FirebaseMessaging.instance.onTokenRefresh.listen(saveToken);
       FirebaseMessaging.onMessage.listen((RemoteMessage message){
         if(!mounted)return;
+        HapticFeedback.vibrate();
+        SystemSound.play(SystemSoundType.alert);
+        try {
+          const MethodChannel('allways_notifications').invokeMethod('showNotification', {
+            'title': message.notification?.title ?? message.data['title'] ?? 'ALLways',
+            'body': message.notification?.body ?? message.data['body'] ?? message.data['message'] ?? 'You have a new ALLways update.',
+          });
+        } catch (_) {}
         final title=message.notification?.title??message.data['title']??'ALLways';
         final body=message.notification?.body??message.data['body']??'';
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -635,7 +646,7 @@ class _DeliveryMapState extends State<DeliveryMap>{
             onMapReady:(){_ready=true;if(me!=null)_focus(me,destination);},
           ),
           children:[
-            TileLayer(urlTemplate:'https://tile.openstreetmap.org/{z}/{x}/{y}.png',maxZoom:19,userAgentPackageName:'com.allways.delivery'),
+            TileLayer(urlTemplate:'_mapboxTilesUrl()',maxZoom:19,userAgentPackageName:'com.allways.delivery'),
             MarkerLayer(markers:markers),
           ],
         ),
