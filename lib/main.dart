@@ -674,11 +674,33 @@ class Earnings extends StatelessWidget{
   );
 }
 
+Future<void> _chooseAllwaysLanguage(BuildContext context) async {
+  final prefs = await SharedPreferences.getInstance();
+  final current = prefs.getString('app_language') ?? 'English';
+  final selected = await showDialog<String>(
+    context: context,
+    builder: (d) => SimpleDialog(
+      title: const Text('Language'),
+      children: [
+        RadioListTile<String>(value: 'English', groupValue: current, title: const Text('English'), onChanged: (v) => Navigator.pop(d, v)),
+        RadioListTile<String>(value: 'Hindi', groupValue: current, title: const Text('हिन्दी'), onChanged: (v) => Navigator.pop(d, v)),
+      ],
+    ),
+  );
+  if (selected != null) {
+    await prefs.setString('app_language', selected);
+    if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Language set to $selected.')),
+    );
+  }
+}
+
 class Profile extends StatelessWidget{
   final User user;final Future<void> Function() onSos;const Profile({super.key,required this.user,required this.onSos});
   @override Widget build(BuildContext c)=>ListView(padding:const EdgeInsets.fromLTRB(16,18,16,28),children:[
     const Text('Profile & Safety',style:TextStyle(fontSize:24,fontWeight:FontWeight.w900)),const SizedBox(height:12),
     Card(child:ListTile(leading:const Icon(Icons.person_outline,color:blue),title:Text(user.displayName??'Delivery Partner'),subtitle:Text(user.email??''))),
+    Card(child:ListTile(leading:const Icon(Icons.language,color:blue),title:const Text('Language'),subtitle:const Text('English / हिन्दी'),trailing:const Icon(Icons.chevron_right),onTap:()=>_chooseAllwaysLanguage(c))),
     const Card(child:ListTile(leading:Icon(Icons.description_outlined),title:Text('Documents'),subtitle:Text('Keep vehicle and verification details current.'))),
     const Card(child:ListTile(leading:Icon(Icons.help_outline),title:Text('Help & Support'),subtitle:Text('Contact ALLways operations for delivery issues.'))),
     Card(child:ListTile(leading:const Icon(Icons.sos,color:Colors.red),title:const Text('SOS / Emergency'),subtitle:const Text('Send an alert to ALLways operations.'),onTap:onSos)),
