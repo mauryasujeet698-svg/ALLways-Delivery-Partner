@@ -616,8 +616,8 @@ class _DeliveryMapState extends State<DeliveryMap>{
       for(final d in s.data?.docs??const <QueryDocumentSnapshot<Map<String,dynamic>>>[])if(widget.selectedId==d.id)chosen=d;
       chosen??=(s.data?.docs.isNotEmpty==true?s.data!.docs.first:null);
       final x=chosen?.data();
-      final lat=n(x?['customerLatitude']??x?['destinationLatitude']);
-      final lng=n(x?['customerLongitude']??x?['destinationLongitude']);
+      final lat=n(x?['customerLat']??x?['customerLatitude']??x?['destinationLatitude']);
+      final lng=n(x?['customerLng']??x?['customerLongitude']??x?['destinationLongitude']);
       final me=widget.position==null?null:LatLng(widget.position!.latitude,widget.position!.longitude);
       final destination=(lat!=0&&lng!=0)?LatLng(lat,lng):null;
       if(me!=null)WidgetsBinding.instance.addPostFrameCallback((_)=>_focus(me,destination));
@@ -642,7 +642,7 @@ class _DeliveryMapState extends State<DeliveryMap>{
         Positioned(top:14,left:14,right:14,child:SafeArea(bottom:false,child:Card(child:Padding(padding:const EdgeInsets.all(13),child:Row(children:[
           const Icon(Icons.navigation,color:blue),const SizedBox(width:9),Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
             Text(chosen==null?'Live delivery map':'Tracking order #'+chosen.id,style:const TextStyle(fontWeight:FontWeight.w800)),
-            if(distance!=null)Text(distance<1000?'Customer • '+distance.round().toString()+' m away':'Customer • '+(distance/1000).toStringAsFixed(1)+' km away',style:const TextStyle(color:Colors.grey,fontSize:12)),
+            if(distance!=null)Text(distance<1000?'Customer live • '+distance.round().toString()+' m away':'Customer live • '+(distance/1000).toStringAsFixed(1)+' km away',style:const TextStyle(color:Colors.grey,fontSize:12)),
           ])),
         ]))))),
       ]);
