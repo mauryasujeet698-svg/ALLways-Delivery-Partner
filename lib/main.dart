@@ -677,6 +677,7 @@ class Earnings extends StatelessWidget{
 Future<void> _chooseAllwaysLanguage(BuildContext context) async {
   final prefs = await SharedPreferences.getInstance();
   final current = prefs.getString('app_language') ?? 'English';
+  if (!context.mounted) return;
   final selected = await showDialog<String>(
     context: context,
     builder: (d) => SimpleDialog(
