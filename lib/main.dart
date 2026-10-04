@@ -16,6 +16,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 const blue=Color(0xFF1565C0), bg=Color(0xFFF7F8FB);
+const _mapboxPublicToken = String.fromEnvironment('MAPBOX_PUBLIC_TOKEN');
+const _mapboxTilesUrl = 'https://api.mapbox.com/styles/v1/mapbox/streets-v12/tiles/256/{z}/{x}/{y}?access_token=' + _mapboxPublicToken;
 @pragma('vm:entry-point')
 Future<void> _background(RemoteMessage message) async { await Firebase.initializeApp(); }
 
@@ -699,7 +701,7 @@ class _DeliveryMapState extends State<DeliveryMap>{
             onMapReady:(){_ready=true;if(me!=null)_focus(me,destination);},
           ),
           children:[
-            TileLayer(urlTemplate:'_mapboxTilesUrl()',maxZoom:19,userAgentPackageName:'com.allways.delivery'),
+            TileLayer(urlTemplate: _mapboxTilesUrl,maxZoom:19,userAgentPackageName:'com.allways.delivery'),
             MarkerLayer(markers:markers),
           ],
         ),
