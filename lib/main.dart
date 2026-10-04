@@ -458,62 +458,56 @@ class _DeliveryShellState extends State<DeliveryShell>{
       }
     }
   }
+  Future<void> _verifyDeliveryPinDirect(DocumentReference ref,String pin) async {
+    final snap=await ref.get();
+    final d=snap.data()??<String,dynamic>{};
+    final assigned=(d['carrierUid']??d['deliveryPartnerUid']??d['assignedPartnerId']??'').toString();
+    if(assigned!=widget.user.uid)throw Exception('This delivery is not assigned to you.');
+    final status=(d['status']??'').toString().toLowerCase();
+    if(status!='out for delivery')throw Exception('Delivery is not ready for confirmation.');
+    if((d['confirmationPin']??'').toString().trim()!=pin)throw Exception('Incorrect confirmation number.');
+    await ref.update({'status':'Delivered','deliveryPinVerified':true,'deliveryPinVerifiedAt':FieldValue.serverTimestamp(),'updatedAt':FieldValue.serverTimestamp()});
+    await FirebaseFirestore.instance.collection('deliveryPartners').doc(widget.user.uid).set({'pendingOrderId':null,'currentOrderId':null,'availableForDeliveries':true,'dutyStatus':'online','status':'online','updatedAt':FieldValue.serverTimestamp()},SetOptions(merge:true));
+  }
+
   Future<void> _status(DocumentReference ref,String value) async {
-    try {
-      if (value == 'Delivered') {
-        final pinController = TextEditingController();
-        try {
-          final pin = await showDialog<String>(
-            context: context,
-            builder: (dialogContext) => AlertDialog(
-              title: const Text('Customer confirmation'),
-              content: TextField(
-                controller: pinController,
-                autofocus: true,
-                keyboardType: TextInputType.number,
-                maxLength: 4,
-                decoration: const InputDecoration(
-                  labelText: '4-digit confirmation number',
-                  hintText: 'Enter customer PIN',
-                ),
-              ),
-              actions: [
-                TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),
-                FilledButton(
-                  onPressed: () => Navigator.pop(dialogContext, pinController.text.trim()),
-                  child: const Text('Confirm delivery'),
-                ),
+    try{
+      if(value=='Delivered'){
+        final pinController=TextEditingController();
+        try{
+          final pin=await showDialog<String>(
+            context:context,
+            builder:(dialogContext)=>AlertDialog(
+              title:const Text('Customer confirmation'),
+              content:TextField(controller:pinController,autofocus:true,keyboardType:TextInputType.number,maxLength:4,decoration:const InputDecoration(labelText:'4-digit confirmation number',hintText:'Enter customer PIN')),
+              actions:[
+                TextButton(onPressed:()=>Navigator.pop(dialogContext),child:const Text('Cancel')),
+                FilledButton(onPressed:()=>Navigator.pop(dialogContext,pinController.text.trim()),child:const Text('Confirm delivery')),
               ],
             ),
           );
-          if (pin == null || pin.length != 4) return;
-          final callable = FirebaseFunctions.instance.httpsCallable('verifyConfirmationPin');
-          await callable.call({'type': 'delivery', 'id': ref.id, 'pin': pin});
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('PIN verified. Delivery completed.')),
-            );
+          if(pin==null||pin.length!=4)return;
+          try{
+            final callable=FirebaseFunctions.instance.httpsCallable('verifyConfirmationPin');
+            await callable.call({'type':'delivery','id':ref.id,'pin':pin});
+          }on FirebaseFunctionsException catch(e){
+            if(e.code=='not-found'||e.code=='NOT_FOUND'||e.code=='unavailable'){
+              await _verifyDeliveryPinDirect(ref,pin);
+            }else{rethrow;}
           }
+          if(mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('PIN verified. Delivery completed.')));
           return;
-        } finally {
-          pinController.dispose();
-        }
+        }finally{pinController.dispose();}
       }
-      await ref.update({
-        'status':value,
-        'updatedAt':FieldValue.serverTimestamp(),
-        'statusNote':'Updated by ALLways Delivery Partner',
-      });
-    } on FirebaseFunctionsException catch (e) {
-      if(mounted)ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content:Text(e.message ?? 'Could not verify the confirmation number.')),
-      );
-    } catch(e) {
-      if(mounted)ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content:Text('Update failed: '+e.toString())),
-      );
+      await ref.update({'status':value,'updatedAt':FieldValue.serverTimestamp(),'statusNote':'Updated by ALLways Delivery Partner'});
+      if(mounted)setState(()=>selectedId=ref.id);
+    }on FirebaseFunctionsException catch(e){
+      if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text(e.message??'Could not verify the confirmation number.')));
+    }catch(e){
+      if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text(e.toString().replaceFirst('Exception: ',''))));
     }
   }
+
   Future<void> _call(String phone)async{final p=phone.replaceAll(RegExp(r'[^0-9+]'),'');if(p.isNotEmpty)await launchUrl(Uri(scheme:'tel',path:p),mode:LaunchMode.externalApplication);}
   Future<void> _sos()async{await FirebaseFirestore.instance.collection('sosAlerts').add({'uid':widget.user.uid,'role':'delivery_partner','createdAt':FieldValue.serverTimestamp(),'status':'open'});if(mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('SOS alert sent to ALLways operations.')));}
   @override Widget build(BuildContext context){
