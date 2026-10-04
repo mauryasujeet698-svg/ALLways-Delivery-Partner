@@ -495,12 +495,12 @@ class _DeliveryShellState extends State<DeliveryShell>{
               await _verifyDeliveryPinDirect(ref,pin);
             }else{rethrow;}
           }
-          if(mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('PIN verified. Delivery completed.')));
+          if(mounted){setState(()=>{selectedId=ref.id;tab=1;});ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('PIN verified. Delivery completed.')));}
           return;
         }finally{pinController.dispose();}
       }
       await ref.update({'status':value,'updatedAt':FieldValue.serverTimestamp(),'statusNote':'Updated by ALLways Delivery Partner'});
-      if(mounted)setState(()=>selectedId=ref.id);
+      if(mounted)setState(()=>{selectedId=ref.id;tab=2;});
     }on FirebaseFunctionsException catch(e){
       if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text(e.message??'Could not verify the confirmation number.')));
     }catch(e){
