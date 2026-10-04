@@ -14,6 +14,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'update_service.dart';
 
 const blue=Color(0xFF1565C0), bg=Color(0xFFF7F8FB);
 const _mapboxPublicToken = String.fromEnvironment('MAPBOX_PUBLIC_TOKEN');
@@ -41,7 +42,7 @@ class AllwaysDeliveryApp extends StatelessWidget {
       textTheme:GoogleFonts.poppinsTextTheme(),
       cardTheme:const CardThemeData(color:Colors.white,elevation:0,margin:EdgeInsets.zero),
     ),
-    home:const AuthGate(),
+    home:const AllwaysUpdateGate(repo:'mauryasujeet698-svg/ALLways-Delivery-Partner',packageChannel:'com.allways.delivery/apk_installer',assetName:'allways-delivery-partner-latest.apk',child:AuthGate()),
   );
 }
 
