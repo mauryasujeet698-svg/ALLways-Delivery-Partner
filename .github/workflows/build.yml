@@ -30,10 +30,10 @@ jobs:
           cache: true
 
       - name: Bootstrap Android
-        shell: bash
+        shell: cmd
         run: |
           flutter create --platforms=android --org com.allways --project-name delivery .
-          python - <<'PY'
+          py -3 - <<'PY'
           from pathlib import Path
           p = Path("android/settings.gradle.kts")
           s = p.read_text()
@@ -218,7 +218,8 @@ jobs:
           }
           KOTLIN
       - name: Configure native in-app updater
-        run: python tool/configure_android_updater.py
+        shell: cmd
+        run: py -3 tool/configure_android_updater.py
 
       - name: Configure release signing
         shell: bash
