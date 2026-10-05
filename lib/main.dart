@@ -511,7 +511,7 @@ class _DeliveryShellState extends State<DeliveryShell>{
   }
   Future<void> _verifyDeliveryPinDirect(DocumentReference ref,String pin) async {
     final snap=await ref.get();
-    final d=snap.data()??<String,dynamic>{};
+    final d=snap.data() as Map<String,dynamic>? ?? <String,dynamic>{};
     final assigned=(d['carrierUid']??d['deliveryPartnerUid']??d['assignedPartnerId']??'').toString();
     if(assigned!=widget.user.uid)throw Exception('This delivery is not assigned to you.');
     final status=(d['status']??'').toString().toLowerCase();
@@ -546,12 +546,12 @@ class _DeliveryShellState extends State<DeliveryShell>{
               await _verifyDeliveryPinDirect(ref,pin);
             }else{rethrow;}
           }
-          if(mounted){setState(()=>{selectedId=ref.id;tab=1;});ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('PIN verified. Delivery completed.')));}
+          if(mounted){setState(() { selectedId=ref.id; tab=1; });ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('PIN verified. Delivery completed.')));}
           return;
         }finally{pinController.dispose();}
       }
       await ref.update({'status':value,'updatedAt':FieldValue.serverTimestamp(),'statusNote':'Updated by ALLways Delivery Partner'});
-      if(mounted)setState(()=>{selectedId=ref.id;tab=2;});
+      if(mounted)setState(() { selectedId=ref.id; tab=2; });
     }on FirebaseFunctionsException catch(e){
       if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text(e.message??'Could not verify the confirmation number.')));
     }catch(e){
