@@ -105,7 +105,6 @@ jobs:
 
           cat > android/app/src/main/kotlin/com/allways/delivery/MainActivity.kt <<'KOTLIN'
           package com.allways.delivery
-
           import android.app.NotificationChannel
           import android.app.NotificationManager
           import android.app.PendingIntent
@@ -115,13 +114,16 @@ jobs:
           import android.media.RingtoneManager
           import android.os.Build
           import android.os.Bundle
+          import android.speech.tts.TextToSpeech
           import androidx.core.app.NotificationCompat
           import io.flutter.embedding.android.FlutterActivity
           import io.flutter.embedding.engine.FlutterEngine
           import io.flutter.plugin.common.MethodChannel
+          import java.util.Locale
 
           class MainActivity : FlutterActivity() {
               private val channelId = "allways_urgent_v2"
+              private var textToSpeech: TextToSpeech? = null
 
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
@@ -132,10 +134,17 @@ jobs:
                   super.configureFlutterEngine(flutterEngine)
                   MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "allways_notifications")
                       .setMethodCallHandler { call, result ->
-                          if (call.method == "showNotification") {
-                              showNotification(call.argument<String>("title") ?: "ALLways", call.argument<String>("body") ?: "")
-                              result.success(null)
-                          } else result.notImplemented()
+                          when (call.method) {
+                              "showNotification" -> {
+                                  showNotification(call.argument<String>("title") ?: "ALLways", call.argument<String>("body") ?: "")
+                                  result.success(null)
+                              }
+                              "speakAssignment" -> {
+                                  speakAssignment(call.argument<String>("text") ?: "New delivery assigned.")
+                                  result.success(null)
+                              }
+                              else -> result.notImplemented()
+                          }
                       }
               }
 
@@ -176,6 +185,27 @@ jobs:
                       .build()
                   (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
                       .notify((System.currentTimeMillis() and 0x7fffffff).toInt(), notification)
+              }
+
+              private fun speakAssignment(text: String) {
+                  if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) return
+                  if (textToSpeech == null) {
+                      textToSpeech = TextToSpeech(this) { status ->
+                          if (status == TextToSpeech.SUCCESS) {
+                              textToSpeech?.language = Locale.getDefault()
+                              textToSpeech?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "allways_assignment")
+                          }
+                      }
+                  } else {
+                      textToSpeech?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "allways_assignment")
+                  }
+              }
+
+              override fun onDestroy() {
+                  textToSpeech?.stop()
+                  textToSpeech?.shutdown()
+                  textToSpeech = null
+                  super.onDestroy()
               }
           }
           KOTLIN

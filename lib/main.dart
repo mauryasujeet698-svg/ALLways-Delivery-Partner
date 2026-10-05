@@ -19,6 +19,7 @@ import 'update_service.dart';
 const blue=Color(0xFF1565C0), bg=Color(0xFFF7F8FB);
 const _mapboxPublicToken = String.fromEnvironment('MAPBOX_PUBLIC_TOKEN');
 const _mapboxTilesUrl = 'https://api.mapbox.com/styles/v1/mapbox/streets-v12/tiles/256/{z}/{x}/{y}?access_token=' + _mapboxPublicToken;
+const _allwaysNotificationChannel = MethodChannel('allways_notifications');
 @pragma('vm:entry-point')
 Future<void> _background(RemoteMessage message) async { await Firebase.initializeApp(); }
 
@@ -319,9 +320,13 @@ class DeliveryShell extends StatefulWidget {
   @override State<DeliveryShell> createState()=>_DeliveryShellState();
 }
 class _DeliveryShellState extends State<DeliveryShell>{
-  int tab=0; bool online=false; Position? position; StreamSubscription<Position>? locationSub; String? selectedId;
-  @override void initState(){super.initState();_load();_notifications();}
-  @override void dispose(){locationSub?.cancel();super.dispose();}
+  int tab=0; bool online=false; Position? position; StreamSubscription<Position>? locationSub;
+  StreamSubscription<QuerySnapshot<Map<String,dynamic>>>? assignmentSub;
+  String? selectedId; String? _suppressAssignmentAlertId;
+  final Set<String> _knownAssignmentIds={}; final Map<String,String> _knownAssignmentStatuses={};
+  bool _assignmentSnapshotReady=false, assignmentBeep=true, assignmentAudio=true;
+  @override void initState(){super.initState();_load();_notifications();_loadAssignmentAlertSettings();_listenForAssignments();}
+  @override void dispose(){locationSub?.cancel();assignmentSub?.cancel();super.dispose();}
   Future<void> _load() async {
     try{
       final p=await FirebaseFirestore.instance.collection('deliveryPartners').doc(widget.user.uid).get();
@@ -374,6 +379,51 @@ class _DeliveryShellState extends State<DeliveryShell>{
       });
     }catch(_){} 
   }
+  Future<void> _loadAssignmentAlertSettings() async {
+    final prefs=await SharedPreferences.getInstance(); if(!mounted)return;
+    setState((){assignmentBeep=prefs.getBool('assignment_beep_enabled')??true;assignmentAudio=prefs.getBool('assignment_audio_enabled')??true;});
+  }
+  Future<void> _setAssignmentBeep(bool value) async {final p=await SharedPreferences.getInstance();await p.setBool('assignment_beep_enabled',value);if(mounted)setState(()=>assignmentBeep=value);}
+  Future<void> _setAssignmentAudio(bool value) async {final p=await SharedPreferences.getInstance();await p.setBool('assignment_audio_enabled',value);if(mounted)setState(()=>assignmentAudio=value);}
+  void _listenForAssignments(){
+    assignmentSub=FirebaseFirestore.instance.collection('orders').where('carrierUid',isEqualTo:widget.user.uid).snapshots().listen((snap){
+      if(!_assignmentSnapshotReady){for(final d in snap.docs){_knownAssignmentIds.add(d.id);_knownAssignmentStatuses[d.id]=(d.data()['status']??'').toString().toLowerCase();}_assignmentSnapshotReady=true;return;}
+      for(final d in snap.docs){
+        final x=d.data(); final assigned=(x['carrierUid']??x['deliveryPartnerUid']??'').toString(); final status=(x['status']??'').toString().toLowerCase();
+        final active=!{'delivered','completed','cancelled','rejected','expired'}.contains(status); final previous=_knownAssignmentStatuses[d.id];
+        final newlyAssigned=assigned==widget.user.uid&&active&&(previous==null||(status=='assigned'&&previous!='assigned')||!_knownAssignmentIds.contains(d.id));
+        _knownAssignmentIds.add(d.id);_knownAssignmentStatuses[d.id]=status;
+        if(!newlyAssigned)continue;
+        if(_suppressAssignmentAlertId==d.id){_suppressAssignmentAlertId=null;continue;}
+        _triggerAssignmentAlert(d.id,x);
+      }
+    });
+  }
+  Future<void> _triggerAssignmentAlert(String orderId,Map<String,dynamic> order) async {
+    final orderNo=(order['id']??orderId).toString(), customer=(order['customerName']??order['name']??'customer').toString();
+    final body='Order #$orderNo has been assigned to you.';
+    if(assignmentBeep){HapticFeedback.heavyImpact();await SystemSound.play(SystemSoundType.alert);await Future<void>.delayed(const Duration(milliseconds:280));await SystemSound.play(SystemSoundType.alert);try{await _allwaysNotificationChannel.invokeMethod('showNotification',{'title':'New delivery assigned','body':body});}catch(_){}}
+    if(assignmentAudio){try{await _allwaysNotificationChannel.invokeMethod('speakAssignment',{'text':'New delivery assigned. Order $orderNo for $customer.'});}catch(_){}}
+    if(mounted){ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text(body),duration:const Duration(seconds:5)));setState(()=>selectedId=orderId);}
+  }
+  Future<void> _support() async {
+    final subject=TextEditingController(text:'Delivery support'), details=TextEditingController();
+    try{
+      final send=await showDialog<bool>(context:context,builder:(d)=>AlertDialog(
+        title:const Text('ALLways Support'),
+        content:SizedBox(width:420,child:Column(mainAxisSize:MainAxisSize.min,children:[
+          TextField(controller:subject,decoration:const InputDecoration(labelText:'Subject')),
+          const SizedBox(height:12),
+          TextField(controller:details,minLines:3,maxLines:5,decoration:const InputDecoration(labelText:'Describe the issue',hintText:'Order, customer, payment, app or other problem')),
+        ])),
+        actions:[TextButton(onPressed:()=>Navigator.pop(d,false),child:const Text('Cancel')),FilledButton(onPressed:()=>Navigator.pop(d,details.text.trim().isNotEmpty),child:const Text('Send to support'))],
+      ));
+      if(send!=true)return;
+      await FirebaseFirestore.instance.collection('supportTickets').add({'uid':widget.user.uid,'role':'delivery_partner','name':widget.user.displayName??'Delivery Partner','email':widget.user.email??'','subject':subject.text.trim().isEmpty?'Delivery support':subject.text.trim(),'message':details.text.trim(),'orderId':selectedId,'status':'open','createdAt':FieldValue.serverTimestamp()});
+      if(mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Support request sent to ALLways operations.')));
+    }finally{subject.dispose();details.dispose();}
+  }
+
   Future<bool> _locationPermission() async {
     if(!await Geolocator.isLocationServiceEnabled())return false;
     var p=await Geolocator.checkPermission();
@@ -446,6 +496,7 @@ class _DeliveryShellState extends State<DeliveryShell>{
           'updatedAt':FieldValue.serverTimestamp(),
         });
       });
+      _suppressAssignmentAlertId=doc.id;
       if(mounted){
         setState(()=>selectedId=doc.id);
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Order accepted.')));
@@ -516,7 +567,7 @@ class _DeliveryShellState extends State<DeliveryShell>{
       DeliveryOrders(user:widget.user,onStatus:_status,onSelect:(id)=>setState(()=>selectedId=id),onCall:_call),
       DeliveryMap(user:widget.user,selectedId:selectedId,position:position),
       Earnings(user:widget.user),
-      Profile(user:widget.user,onSos:_sos),
+      Profile(user:widget.user,onSos:_sos,assignmentBeep:assignmentBeep,assignmentAudio:assignmentAudio,onAssignmentBeep:_setAssignmentBeep,onAssignmentAudio:_setAssignmentAudio,onSupport:_support),
     ];
     return Scaffold(
       body:SafeArea(child:IndexedStack(index:tab,children:pages)),
@@ -619,27 +670,45 @@ class _OrderItemsSheet extends StatelessWidget{
 }
 
 class DeliveryOrders extends StatelessWidget{
-  final User user;final Future<void> Function(DocumentReference,String) onStatus;final void Function(String) onSelect;final Future<void> Function(String) onCall;
+  final User user; final Future<void> Function(DocumentReference,String) onStatus; final void Function(String) onSelect; final Future<void> Function(String) onCall;
   const DeliveryOrders({super.key,required this.user,required this.onStatus,required this.onSelect,required this.onCall});
   num n(dynamic v)=>v is num?v:num.tryParse((v??'').toString())??0;
+  DateTime stamp(Map<String,dynamic> x){
+    for(final k in const ['assignedAt','deliveredAt','completedAt','updatedAt','createdAt']){
+      final v=x[k]; if(v is Timestamp)return v.toDate(); if(v is DateTime)return v;
+      if(v is num){final q=v.toInt();return DateTime.fromMillisecondsSinceEpoch(q<100000000000?q*1000:q);}
+      if(v!=null){final p=DateTime.tryParse(v.toString());if(p!=null)return p;}
+    } return DateTime.fromMillisecondsSinceEpoch(0);
+  }
+  Widget card(BuildContext c,QueryDocumentSnapshot<Map<String,dynamic>> d,bool done){
+    final x=d.data(), status=(x['status']??(done?'Delivered':'Assigned')).toString(), phone=(x['phone']??x['customerPhone']??'').toString();
+    return Card(margin:const EdgeInsets.only(bottom:10),child:Padding(padding:const EdgeInsets.all(14),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+      Row(children:[Expanded(child:Text('#'+(x['id']??d.id).toString(),style:const TextStyle(fontWeight:FontWeight.w900))),Text('₹'+n(x['total']).toStringAsFixed(0),style:const TextStyle(fontWeight:FontWeight.w900))]),
+      const SizedBox(height:7),Text((x['name']??x['customerName']??'Customer').toString(),style:const TextStyle(fontWeight:FontWeight.w700)),Text((x['address']??'Address unavailable').toString(),maxLines:2,overflow:TextOverflow.ellipsis),
+      const SizedBox(height:8),Text(status,style:const TextStyle(color:blue,fontWeight:FontWeight.w800)),
+      const SizedBox(height:10),Row(children:[
+        Expanded(child:OutlinedButton(onPressed:()=>showModalBottomSheet(context:c,showDragHandle:true,builder:(_)=>_OrderItemsSheet(order:x)),child:const Text('View items'))),
+        if(!done)...[const SizedBox(width:8),Expanded(child:OutlinedButton(onPressed:()=>onSelect(d.id),child:const Text('Live map')))],
+        if(!done&&phone.isNotEmpty)IconButton(tooltip:'Call customer',onPressed:()=>onCall(phone),icon:const Icon(Icons.call_outlined)),
+      ]),
+      if(!done&&['assigned','pending_acceptance'].contains(status.toLowerCase()))SizedBox(width:double.infinity,child:FilledButton(onPressed:()=>onStatus(d.reference,'Out for delivery'),style:FilledButton.styleFrom(backgroundColor:blue),child:const Text('Start delivery'))),
+      if(!done&&status.toLowerCase()=='out for delivery')SizedBox(width:double.infinity,child:FilledButton(onPressed:()=>onStatus(d.reference,'Delivered'),style:FilledButton.styleFrom(backgroundColor:Colors.green),child:const Text('Mark delivered'))),
+    ])));
+  }
   @override Widget build(BuildContext c)=>StreamBuilder<QuerySnapshot<Map<String,dynamic>>>(
     stream:FirebaseFirestore.instance.collection('orders').where('carrierUid',isEqualTo:user.uid).snapshots(),
     builder:(context,s){
-      if(s.hasError)return Center(child:Text('Could not load deliveries: '+s.error.toString()));
-      if(!s.hasData)return const Center(child:CircularProgressIndicator());
-      final docs=s.data!.docs;
-      if(docs.isEmpty)return const Center(child:Text('No assigned deliveries yet.'));
+      if(s.hasError)return Center(child:Text('Could not load deliveries: '+s.error.toString())); if(!s.hasData)return const Center(child:CircularProgressIndicator());
+      final active=<QueryDocumentSnapshot<Map<String,dynamic>>>[], delivered=<QueryDocumentSnapshot<Map<String,dynamic>>>[];
+      for(final d in s.data!.docs){final st=(d.data()['status']??'').toString().toLowerCase(); if({'cancelled','rejected','expired'}.contains(st))continue; if({'delivered','completed'}.contains(st))delivered.add(d);else active.add(d);}
+      active.sort((a,b)=>stamp(b.data()).compareTo(stamp(a.data())));delivered.sort((a,b)=>stamp(b.data()).compareTo(stamp(a.data())));
+      final recent=delivered.take(3).toList();
+      if(active.isEmpty&&recent.isEmpty)return const Center(child:Text('No assigned deliveries yet.'));
       return ListView(padding:const EdgeInsets.fromLTRB(16,18,16,28),children:[
         const Text('My Deliveries',style:TextStyle(fontSize:24,fontWeight:FontWeight.w900)),const SizedBox(height:12),
-        ...docs.map((d){final x=d.data();final status=(x['status']??'Assigned').toString();final phone=(x['phone']??x['customerPhone']??'').toString();
-          return Card(margin:const EdgeInsets.only(bottom:10),child:Padding(padding:const EdgeInsets.all(14),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
-            Row(children:[Expanded(child:Text('#'+(x['id']??d.id).toString(),style:const TextStyle(fontWeight:FontWeight.w900))),Text('₹'+n(x['total']).toStringAsFixed(0),style:const TextStyle(fontWeight:FontWeight.w900))]),
-            const SizedBox(height:7),Text((x['name']??x['customerName']??'Customer').toString(),style:const TextStyle(fontWeight:FontWeight.w700)),Text((x['address']??'Address unavailable').toString(),maxLines:2,overflow:TextOverflow.ellipsis),const SizedBox(height:8),Text(((x['deliveryType']??'instant').toString().toLowerCase()=='scheduled'?'Scheduled delivery':'Instant delivery')+(x['scheduledFor'] is num?' • '+DateTime.fromMillisecondsSinceEpoch((x['scheduledFor'] as num).toInt()).toLocal().toString():'')+' • '+status,style:const TextStyle(color:blue,fontWeight:FontWeight.w800)),
-            const SizedBox(height:10),Row(children:[Expanded(child:OutlinedButton(onPressed:()=>showModalBottomSheet(context:context,showDragHandle:true,builder:(_)=>_OrderItemsSheet(order:x)),child:const Text('View items'))),const SizedBox(width:8),Expanded(child:OutlinedButton(onPressed:()=>onSelect(d.id),child:const Text('Live map'))),if(phone.isNotEmpty)IconButton(onPressed:()=>onCall(phone),icon:const Icon(Icons.call_outlined))]),
-            if(status=='Assigned'||status=='pending_acceptance')SizedBox(width:double.infinity,child:FilledButton(onPressed:()=>onStatus(d.reference,'Out for delivery'),style:FilledButton.styleFrom(backgroundColor:blue),child:const Text('Start delivery'))),
-            if(status=='Out for delivery')SizedBox(width:double.infinity,child:FilledButton(onPressed:()=>onStatus(d.reference,'Delivered'),style:FilledButton.styleFrom(backgroundColor:Colors.green),child:const Text('Mark delivered'))),
-          ])));
-        }),
+        if(active.isNotEmpty)...[const Text('Assigned deliveries',style:TextStyle(fontSize:16,fontWeight:FontWeight.w800)),const SizedBox(height:8),...active.map((d)=>card(c,d,false))]
+        else const Padding(padding:EdgeInsets.only(bottom:12),child:Text('No active assigned deliveries.')),
+        if(recent.isNotEmpty)...[const SizedBox(height:8),const Text('Last 3 delivered',style:TextStyle(fontSize:16,fontWeight:FontWeight.w800)),const SizedBox(height:4),const Text('Only your three most recent delivered orders are shown here.',style:TextStyle(color:Colors.grey,fontSize:12)),const SizedBox(height:8),...recent.map((d)=>card(c,d,true))],
       ]);
     },
   );
@@ -747,13 +816,17 @@ Future<void> _chooseAllwaysLanguage(BuildContext context) async {
 }
 
 class Profile extends StatelessWidget{
-  final User user;final Future<void> Function() onSos;const Profile({super.key,required this.user,required this.onSos});
+  final User user; final Future<void> Function() onSos; final bool assignmentBeep, assignmentAudio;
+  final Future<void> Function(bool) onAssignmentBeep, onAssignmentAudio; final Future<void> Function() onSupport;
+  const Profile({super.key,required this.user,required this.onSos,required this.assignmentBeep,required this.assignmentAudio,required this.onAssignmentBeep,required this.onAssignmentAudio,required this.onSupport});
   @override Widget build(BuildContext c)=>ListView(padding:const EdgeInsets.fromLTRB(16,18,16,28),children:[
     const Text('Profile & Safety',style:TextStyle(fontSize:24,fontWeight:FontWeight.w900)),const SizedBox(height:12),
     Card(child:ListTile(leading:const Icon(Icons.person_outline,color:blue),title:Text(user.displayName??'Delivery Partner'),subtitle:Text(user.email??''))),
     Card(child:ListTile(leading:const Icon(Icons.language,color:blue),title:const Text('Language'),subtitle:const Text('English / हिन्दी'),trailing:const Icon(Icons.chevron_right),onTap:()=>_chooseAllwaysLanguage(c))),
+    Card(child:SwitchListTile(secondary:const Icon(Icons.notifications_active_outlined,color:blue),title:const Text('Assignment beep'),subtitle:const Text('Play a beep when a new delivery is assigned.'),value:assignmentBeep,onChanged:onAssignmentBeep)),
+    Card(child:SwitchListTile(secondary:const Icon(Icons.record_voice_over_outlined,color:blue),title:const Text('Assignment audio'),subtitle:const Text('Read the new assignment aloud.'),value:assignmentAudio,onChanged:onAssignmentAudio)),
     const Card(child:ListTile(leading:Icon(Icons.description_outlined),title:Text('Documents'),subtitle:Text('Keep vehicle and verification details current.'))),
-    const Card(child:ListTile(leading:Icon(Icons.help_outline),title:Text('Help & Support'),subtitle:Text('Contact ALLways operations for delivery issues.'))),
+    Card(child:ListTile(leading:const Icon(Icons.help_outline,color:blue),title:const Text('Help & Support'),subtitle:const Text('Send a delivery issue to ALLways operations.'),trailing:const Icon(Icons.chevron_right),onTap:onSupport)),
     Card(child:ListTile(leading:const Icon(Icons.sos,color:Colors.red),title:const Text('SOS / Emergency'),subtitle:const Text('Send an alert to ALLways operations.'),onTap:onSos)),
     Card(child:ListTile(leading:const Icon(Icons.logout),title:const Text('Sign out'),onTap:()=>FirebaseAuth.instance.signOut())),
   ]);
