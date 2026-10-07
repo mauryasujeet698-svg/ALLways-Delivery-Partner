@@ -4,6 +4,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+concurrency:
+  group: allways-delivery-partner-android
+  cancel-in-progress: true
+
 permissions:
   contents: write
 
