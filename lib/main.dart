@@ -325,12 +325,13 @@ class _DeliveryShellState extends State<DeliveryShell>{
   StreamSubscription<QuerySnapshot<Map<String,dynamic>>>? assignmentSub;
   StreamSubscription<RemoteMessage>? _messageSub;
   StreamSubscription<RemoteMessage>? _openedMessageSub;
+  StreamSubscription<String>? _tokenRefreshSub;
   bool notificationsEnabled=true;
   String? selectedId; String? _suppressAssignmentAlertId;
   final Set<String> _knownAssignmentIds={}; final Map<String,String> _knownAssignmentStatuses={};
   bool _assignmentSnapshotReady=false, assignmentBeep=true, assignmentAudio=true;
   @override void initState(){super.initState();_load();_loadNotificationSetting();_notifications();_loadAssignmentAlertSettings();_listenForAssignments();}
-  @override void dispose(){locationSub?.cancel();assignmentSub?.cancel();_messageSub?.cancel();_openedMessageSub?.cancel();super.dispose();}
+  @override void dispose(){locationSub?.cancel();assignmentSub?.cancel();_messageSub?.cancel();_openedMessageSub?.cancel();_tokenRefreshSub?.cancel();super.dispose();}
   Future<void> _load() async {
     try{
       final p=await FirebaseFirestore.instance.collection('deliveryPartners').doc(widget.user.uid).get();
@@ -346,12 +347,18 @@ class _DeliveryShellState extends State<DeliveryShell>{
     setState(()=>notificationsEnabled=prefs.getBool('notifications_enabled')??true);
   }
 
-  Future<void> _registerMessagingToken() async {
-    final token=await FirebaseMessaging.instance.getToken();
+  Future<void> _registerMessagingToken([String? suppliedToken]) async {
+    final prefs=await SharedPreferences.getInstance();
+    final token=suppliedToken??await FirebaseMessaging.instance.getToken();
     if(token==null||token.isEmpty)return;
+    final previous=prefs.getString('fcm_token');
+    if(previous!=null&&previous.isNotEmpty&&previous!=token){
+      await FirebaseFirestore.instance.collection('fcmTokens').doc(widget.user.uid).collection('tokens').doc(previous).delete().catchError((_){});
+    }
     await FirebaseFirestore.instance.collection('fcmTokens').doc(widget.user.uid).collection('tokens').doc(token).set({
       'uid':widget.user.uid,'token':token,'role':'delivery_partner','platform':'android','updatedAt':FieldValue.serverTimestamp(),
     },SetOptions(merge:true));
+    await prefs.setString('fcm_token',token);
   }
 
   Future<void> _removeMessagingTokens() async {
@@ -385,7 +392,7 @@ class _DeliveryShellState extends State<DeliveryShell>{
         if(mounted)setState(()=>notificationsEnabled=false);
         return;
       }
-      await FirebaseMessaging.instance.setForegroundNotificationPresentationOptions(alert:true,badge:true,sound:true);
+      await FirebaseMessaging.instance.setForegroundNotificationPresentationOptions(alert:false,badge:true,sound:false);
       await FirebaseMessaging.instance.subscribeToTopic('all_users');
       await FirebaseMessaging.instance.subscribeToTopic('delivery_partners');
       await prefs.setBool('notifications_enabled',true);
@@ -404,8 +411,9 @@ class _DeliveryShellState extends State<DeliveryShell>{
       _openedMessageSub=FirebaseMessaging.onMessageOpenedApp.listen(_handleNotificationTap);
       final initial=await FirebaseMessaging.instance.getInitialMessage();
       if(initial!=null)_handleNotificationTap(initial);
-      FirebaseMessaging.instance.onTokenRefresh.listen((token){
-        if(notificationsEnabled)_registerMessagingToken();
+      await _tokenRefreshSub?.cancel();
+      _tokenRefreshSub=FirebaseMessaging.instance.onTokenRefresh.listen((token){
+        if(notificationsEnabled)_registerMessagingToken(token);
       });
     }catch(_){
       if(mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Notifications could not be initialized. You can retry from Profile.')));
@@ -457,7 +465,7 @@ class _DeliveryShellState extends State<DeliveryShell>{
   Future<void> _triggerAssignmentAlert(String orderId,Map<String,dynamic> order) async {
     final orderNo=(order['id']??orderId).toString(), customer=(order['customerName']??order['name']??'customer').toString();
     final body='Order #$orderNo has been assigned to you.';
-    if(assignmentBeep){HapticFeedback.heavyImpact();await SystemSound.play(SystemSoundType.alert);await Future<void>.delayed(const Duration(milliseconds:280));await SystemSound.play(SystemSoundType.alert);try{await _allwaysNotificationChannel.invokeMethod('showNotification',{'title':'New delivery assigned','body':body});}catch(_){}}
+    if(assignmentBeep){HapticFeedback.heavyImpact();await SystemSound.play(SystemSoundType.alert);await Future<void>.delayed(const Duration(milliseconds:280));await SystemSound.play(SystemSoundType.alert);}
     if(assignmentAudio){try{await _allwaysNotificationChannel.invokeMethod('speakAssignment',{'text':'New delivery assigned. Order $orderNo for $customer.'});}catch(_){}}
     if(mounted){ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text(body),duration:const Duration(seconds:5)));setState(()=>selectedId=orderId);}
   }
@@ -508,15 +516,16 @@ class _DeliveryShellState extends State<DeliveryShell>{
     if(p==LocationPermission.denied)p=await Geolocator.requestPermission();
     return p!=LocationPermission.denied&&p!=LocationPermission.deniedForever;
   }
-  Future<void> _startLocation() async {
-    if(!await _locationPermission())return;
+  Future<bool> _startLocation() async {
+    if(!await _locationPermission())return false;
     try{
       final LocationSettings settings=Platform.isAndroid && online ? AndroidSettings(accuracy:LocationAccuracy.high,distanceFilter:10,intervalDuration:const Duration(seconds:10),foregroundNotificationConfig:const ForegroundNotificationConfig(notificationTitle:'ALLways delivery tracking',notificationText:'ALLways is sharing your location while you are online or on an active delivery.',notificationChannelName:'ALLways Delivery Tracking',enableWakeLock:true,setOngoing:true)) : const LocationSettings(accuracy:LocationAccuracy.high,distanceFilter:10);
       final first=await Geolocator.getCurrentPosition(locationSettings:settings);
       position=first;await _saveLocation(first);
       await locationSub?.cancel();
       locationSub=Geolocator.getPositionStream(locationSettings:settings).listen((p){position=p;_saveLocation(p);if(mounted)setState((){});});
-    }catch(_){}
+      return true;
+    }catch(_){return false;}
   }
   Future<void> _saveLocation(Position p) async {
     try{
@@ -534,8 +543,14 @@ class _DeliveryShellState extends State<DeliveryShell>{
         return;
       }
     }
-    if(value&&!await _locationPermission()){if(mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Location permission is required before going online.')));return;}
-    if(value)await _startLocation();else await locationSub?.cancel();
+    if(value){
+      if(!await _locationPermission()){if(mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Location permission is required before going online.')));return;}
+      if(!await _startLocation()){if(mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Live location could not be started. Turn on device location and try again.')));return;}
+    }else{
+      await locationSub?.cancel();
+      locationSub=null;
+      position=null;
+    }
     final data={'status':value?'online':'offline','dutyStatus':value?'online':'offline','availableForDeliveries':value,'statusUpdatedAt':FieldValue.serverTimestamp()};
     await FirebaseFirestore.instance.collection('deliveryPartners').doc(widget.user.uid).set({...data,'uid':widget.user.uid,'availableForDeliveries':value,'isOnline':value},SetOptions(merge:true));
     if(mounted)setState(()=>online=value);
@@ -810,7 +825,28 @@ class _DeliveryMapState extends State<DeliveryMap>{
             Text(chosen==null?'Live delivery map':'Tracking order #'+chosen.id,style:const TextStyle(fontWeight:FontWeight.w800)),
             if(distance!=null)Text(distance<1000?'Customer live • '+distance.round().toString()+' m away':'Customer live • '+(distance/1000).toStringAsFixed(1)+' km away',style:const TextStyle(color:Colors.grey,fontSize:12)),
           ])),
+          IconButton(
+            tooltip:'Navigate to customer',
+            onPressed:destination==null?null:()async{
+              final url=Uri.parse('https://www.google.com/maps/dir/?api=1&destination=${destination.latitude},${destination.longitude}&travelmode=driving');
+              try{await launchUrl(url,mode:LaunchMode.externalApplication);}catch(_){}
+            },
+            icon:const Icon(Icons.directions_outlined,color:blue),
+          ),
         ]))))),
+        Positioned(
+          right:12,
+          bottom:110,
+          child:SafeArea(
+            child:Column(mainAxisSize:MainAxisSize.min,children:[
+              FloatingActionButton.small(heroTag:'delivery-zoom-in',onPressed:_ready?()=>_mapController.move(_mapController.camera.center,_mapController.camera.zoom+1):null,child:const Icon(Icons.add)),
+              const SizedBox(height:8),
+              FloatingActionButton.small(heroTag:'delivery-zoom-out',onPressed:_ready?()=>_mapController.move(_mapController.camera.center,_mapController.camera.zoom-1):null,child:const Icon(Icons.remove)),
+              const SizedBox(height:8),
+              FloatingActionButton.small(heroTag:'delivery-center',onPressed:!_ready?null:()=>_focus(widget.position==null?const LatLng(25.4358,81.8463):LatLng(widget.position!.latitude,widget.position!.longitude),destination),child:const Icon(Icons.my_location)),
+            ]),
+          ),
+        ),
       ]);
     },
   );
