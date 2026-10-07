@@ -15,6 +15,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'update_service.dart';
+import 'delivery_service.dart';
 
 const blue=Color(0xFF1565C0), bg=Color(0xFFF7F8FB);
 const _mapboxPublicToken = String.fromEnvironment('MAPBOX_PUBLIC_TOKEN');
@@ -322,11 +323,14 @@ class DeliveryShell extends StatefulWidget {
 class _DeliveryShellState extends State<DeliveryShell>{
   int tab=0; bool online=false; Position? position; StreamSubscription<Position>? locationSub;
   StreamSubscription<QuerySnapshot<Map<String,dynamic>>>? assignmentSub;
+  StreamSubscription<RemoteMessage>? _messageSub;
+  StreamSubscription<RemoteMessage>? _openedMessageSub;
+  bool notificationsEnabled=true;
   String? selectedId; String? _suppressAssignmentAlertId;
   final Set<String> _knownAssignmentIds={}; final Map<String,String> _knownAssignmentStatuses={};
   bool _assignmentSnapshotReady=false, assignmentBeep=true, assignmentAudio=true;
-  @override void initState(){super.initState();_load();_notifications();_loadAssignmentAlertSettings();_listenForAssignments();}
-  @override void dispose(){locationSub?.cancel();assignmentSub?.cancel();super.dispose();}
+  @override void initState(){super.initState();_load();_loadNotificationSetting();_notifications();_loadAssignmentAlertSettings();_listenForAssignments();}
+  @override void dispose(){locationSub?.cancel();assignmentSub?.cancel();_messageSub?.cancel();_openedMessageSub?.cancel();super.dispose();}
   Future<void> _load() async {
     try{
       final p=await FirebaseFirestore.instance.collection('deliveryPartners').doc(widget.user.uid).get();
@@ -336,49 +340,100 @@ class _DeliveryShellState extends State<DeliveryShell>{
     }catch(_){}
     if(mounted)setState((){});
   }
+  Future<void> _loadNotificationSetting() async {
+    final prefs=await SharedPreferences.getInstance();
+    if(!mounted)return;
+    setState(()=>notificationsEnabled=prefs.getBool('notifications_enabled')??true);
+  }
+
+  Future<void> _registerMessagingToken() async {
+    final token=await FirebaseMessaging.instance.getToken();
+    if(token==null||token.isEmpty)return;
+    await FirebaseFirestore.instance.collection('fcmTokens').doc(widget.user.uid).collection('tokens').doc(token).set({
+      'uid':widget.user.uid,'token':token,'role':'delivery_partner','platform':'android','updatedAt':FieldValue.serverTimestamp(),
+    },SetOptions(merge:true));
+  }
+
+  Future<void> _removeMessagingTokens() async {
+    final snap=await FirebaseFirestore.instance.collection('fcmTokens').doc(widget.user.uid).collection('tokens').get();
+    final batch=FirebaseFirestore.instance.batch();
+    for(final d in snap.docs)batch.delete(d.reference);
+    if(snap.docs.isNotEmpty)await batch.commit();
+    try{await FirebaseMessaging.instance.deleteToken();}catch(_){}
+  }
+
+  void _handleNotificationTap(RemoteMessage message) {
+    final type=(message.data['type']??'').toString().toLowerCase();
+    final orderId=(message.data['orderId']??message.data['id']??'').toString();
+    if(type.contains('order')||orderId.isNotEmpty){
+      if(mounted)setState(()=>tab=1);
+      if(orderId.isNotEmpty&&mounted)setState(()=>selectedId=orderId);
+    }else if(type.contains('support')&&mounted){
+      setState(()=>tab=4);
+    }
+  }
+
   Future<void> _notifications() async {
     try{
-      final p=await SharedPreferences.getInstance();
-      if(p.getBool('notifications_enabled')==false)return;
-      final s=await FirebaseMessaging.instance.requestPermission(alert:true,badge:true,sound:true);
-      if(s.authorizationStatus==AuthorizationStatus.denied)return;
+      final prefs=await SharedPreferences.getInstance();
+      final enabled=prefs.getBool('notifications_enabled')??true;
+      if(mounted)setState(()=>notificationsEnabled=enabled);
+      if(!enabled)return;
+      final settings=await FirebaseMessaging.instance.requestPermission(alert:true,badge:true,sound:true,provisional:false);
+      if(settings.authorizationStatus==AuthorizationStatus.denied){
+        await prefs.setBool('notifications_enabled',false);
+        if(mounted)setState(()=>notificationsEnabled=false);
+        return;
+      }
       await FirebaseMessaging.instance.setForegroundNotificationPresentationOptions(alert:true,badge:true,sound:true);
       await FirebaseMessaging.instance.subscribeToTopic('all_users');
       await FirebaseMessaging.instance.subscribeToTopic('delivery_partners');
-      await p.setBool('notifications_enabled',true);
-
-      Future<void> saveToken(String? t) async {
-        if(t==null||t.isEmpty)return;
-        await FirebaseFirestore.instance.collection('fcmTokens').doc(widget.user.uid).collection('tokens').doc(t).set({
-          'uid':widget.user.uid,
-          'token':t,
-          'role':'delivery_partner',
-          'platform':'mobile',
-          'updatedAt':FieldValue.serverTimestamp(),
-        },SetOptions(merge:true));
-      }
-
-      await saveToken(await FirebaseMessaging.instance.getToken());
-      FirebaseMessaging.instance.onTokenRefresh.listen(saveToken);
-      FirebaseMessaging.onMessage.listen((RemoteMessage message){
+      await prefs.setBool('notifications_enabled',true);
+      await _registerMessagingToken();
+      await _messageSub?.cancel();
+      _messageSub=FirebaseMessaging.onMessage.listen((RemoteMessage message){
         if(!mounted)return;
         HapticFeedback.vibrate();
         SystemSound.play(SystemSoundType.alert);
-        try {
-          const MethodChannel('allways_notifications').invokeMethod('showNotification', {
-            'title': message.notification?.title ?? message.data['title'] ?? 'ALLways',
-            'body': message.notification?.body ?? message.data['body'] ?? message.data['message'] ?? 'You have a new ALLways update.',
-          });
-        } catch (_) {}
+        try{_allwaysNotificationChannel.invokeMethod('showNotification',{'title':message.notification?.title??message.data['title']??'ALLways','body':message.notification?.body??message.data['body']??message.data['message']??'You have a new ALLways update.'});}catch(_){}
         final title=message.notification?.title??message.data['title']??'ALLways';
         final body=message.notification?.body??message.data['body']??'';
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content:Text(body.isEmpty?title:'$title: $body'),
-          duration:const Duration(seconds:4),
-        ));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text(body.isEmpty?title:'$title: $body'),duration:const Duration(seconds:4)));
       });
-    }catch(_){} 
+      await _openedMessageSub?.cancel();
+      _openedMessageSub=FirebaseMessaging.onMessageOpenedApp.listen(_handleNotificationTap);
+      final initial=await FirebaseMessaging.instance.getInitialMessage();
+      if(initial!=null)_handleNotificationTap(initial);
+      FirebaseMessaging.instance.onTokenRefresh.listen((token){
+        if(notificationsEnabled)_registerMessagingToken();
+      });
+    }catch(_){
+      if(mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Notifications could not be initialized. You can retry from Profile.')));
+    }
   }
+
+  Future<void> _setNotifications(bool value) async {
+    final prefs=await SharedPreferences.getInstance();
+    if(!value){
+      await FirebaseMessaging.instance.unsubscribeFromTopic('all_users');
+      await FirebaseMessaging.instance.unsubscribeFromTopic('delivery_partners');
+      await _removeMessagingTokens();
+      await prefs.setBool('notifications_enabled',false);
+      if(mounted)setState(()=>notificationsEnabled=false);
+      return;
+    }
+    final settings=await FirebaseMessaging.instance.requestPermission(alert:true,badge:true,sound:true,provisional:false);
+    if(settings.authorizationStatus==AuthorizationStatus.denied){
+      if(mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Notification permission is blocked. Enable it in Android settings.')));
+      return;
+    }
+    await FirebaseMessaging.instance.subscribeToTopic('all_users');
+    await FirebaseMessaging.instance.subscribeToTopic('delivery_partners');
+    await _registerMessagingToken();
+    await prefs.setBool('notifications_enabled',true);
+    if(mounted)setState(()=>notificationsEnabled=true);
+  }
+
   Future<void> _loadAssignmentAlertSettings() async {
     final prefs=await SharedPreferences.getInstance(); if(!mounted)return;
     setState((){assignmentBeep=prefs.getBool('assignment_beep_enabled')??true;assignmentAudio=prefs.getBool('assignment_audio_enabled')??true;});
@@ -406,20 +461,43 @@ class _DeliveryShellState extends State<DeliveryShell>{
     if(assignmentAudio){try{await _allwaysNotificationChannel.invokeMethod('speakAssignment',{'text':'New delivery assigned. Order $orderNo for $customer.'});}catch(_){}}
     if(mounted){ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text(body),duration:const Duration(seconds:5)));setState(()=>selectedId=orderId);}
   }
-  Future<void> _support() async {
-    final subject=TextEditingController(text:'Delivery support'), details=TextEditingController();
+  Future<void> _support({String? orderId}) async {
+    final subject=TextEditingController(text:orderId==null?'Delivery support':'Order #$orderId support');
+    final details=TextEditingController();
+    String category='Order / Delivery';
+    String priority='Normal';
     try{
-      final send=await showDialog<bool>(context:context,builder:(d)=>AlertDialog(
+      final send=await showDialog<bool>(context:context,builder:(d)=>StatefulBuilder(builder:(dialogContext,setDialogState)=>AlertDialog(
         title:const Text('ALLways Support'),
-        content:SizedBox(width:420,child:Column(mainAxisSize:MainAxisSize.min,children:[
+        content:SizedBox(width:420,child:SingleChildScrollView(child:Column(mainAxisSize:MainAxisSize.min,children:[
+          DropdownButtonFormField<String>(value:category,decoration:const InputDecoration(labelText:'Issue category'),items:const[
+            DropdownMenuItem(value:'Order / Delivery',child:Text('Order / Delivery')),
+            DropdownMenuItem(value:'Customer / Address',child:Text('Customer / Address')),
+            DropdownMenuItem(value:'Payment / Cash',child:Text('Payment / Cash')),
+            DropdownMenuItem(value:'App / Technical',child:Text('App / Technical')),
+            DropdownMenuItem(value:'Safety / Emergency',child:Text('Safety / Emergency')),
+          ],onChanged:(v){if(v!=null)setDialogState(()=>category=v);}),
+          const SizedBox(height:12),
+          DropdownButtonFormField<String>(value:priority,decoration:const InputDecoration(labelText:'Priority'),items:const[
+            DropdownMenuItem(value:'Normal',child:Text('Normal')),
+            DropdownMenuItem(value:'High',child:Text('High')),
+            DropdownMenuItem(value:'Urgent',child:Text('Urgent')),
+          ],onChanged:(v){if(v!=null)setDialogState(()=>priority=v);}),
+          const SizedBox(height:12),
           TextField(controller:subject,decoration:const InputDecoration(labelText:'Subject')),
           const SizedBox(height:12),
-          TextField(controller:details,minLines:3,maxLines:5,decoration:const InputDecoration(labelText:'Describe the issue',hintText:'Order, customer, payment, app or other problem')),
-        ])),
+          TextField(controller:details,minLines:3,maxLines:6,decoration:const InputDecoration(labelText:'Describe the issue',hintText:'Tell ALLways operations what happened.')),
+        ]))),
         actions:[TextButton(onPressed:()=>Navigator.pop(d,false),child:const Text('Cancel')),FilledButton(onPressed:()=>Navigator.pop(d,details.text.trim().isNotEmpty),child:const Text('Send to support'))],
-      ));
+      )));
       if(send!=true)return;
-      await FirebaseFirestore.instance.collection('supportTickets').add({'uid':widget.user.uid,'role':'delivery_partner','name':widget.user.displayName??'Delivery Partner','email':widget.user.email??'','subject':subject.text.trim().isEmpty?'Delivery support':subject.text.trim(),'message':details.text.trim(),'orderId':selectedId,'status':'open','createdAt':FieldValue.serverTimestamp()});
+      await FirebaseFirestore.instance.collection('supportTickets').add({
+        'requesterId':widget.user.uid,'requesterRole':'delivery_partner','uid':widget.user.uid,
+        'name':widget.user.displayName??'Delivery Partner','email':widget.user.email??'',
+        'subject':subject.text.trim().isEmpty?'Delivery support':subject.text.trim(),
+        'message':details.text.trim(),'orderId':orderId??selectedId,'category':category,'priority':priority,
+        'queue':'Delivery Service Support','status':'open','createdAt':FieldValue.serverTimestamp(),'updatedAt':FieldValue.serverTimestamp(),
+      });
       if(mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Support request sent to ALLways operations.')));
     }finally{subject.dispose();details.dispose();}
   }
@@ -459,101 +537,56 @@ class _DeliveryShellState extends State<DeliveryShell>{
     if(value&&!await _locationPermission()){if(mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Location permission is required before going online.')));return;}
     if(value)await _startLocation();else await locationSub?.cancel();
     final data={'status':value?'online':'offline','dutyStatus':value?'online':'offline','availableForDeliveries':value,'statusUpdatedAt':FieldValue.serverTimestamp()};
-    await FirebaseFirestore.instance.collection('customers').doc(widget.user.uid).set(data,SetOptions(merge:true));
     await FirebaseFirestore.instance.collection('deliveryPartners').doc(widget.user.uid).set({...data,'uid':widget.user.uid,'availableForDeliveries':value,'isOnline':value},SetOptions(merge:true));
     if(mounted)setState(()=>online=value);
   }
   Future<void> _accept(QueryDocumentSnapshot<Map<String,dynamic>> doc) async {
     try{
-      final partnerRef=FirebaseFirestore.instance.collection('deliveryPartners').doc(widget.user.uid);
-      await FirebaseFirestore.instance.runTransaction((tx)async{
-        final latest=await tx.get(doc.reference);
-        final partner=await tx.get(partnerRef);
-        final x=latest.data()??{};
-        final p=partner.data()??{};
-        final assignedToMe=(x['carrierUid']??x['deliveryPartnerUid']??'').toString()==widget.user.uid;
-        if((x['carrierUid']??x['deliveryPartnerUid']??'').toString().isNotEmpty && !assignedToMe){
-          throw Exception('This order is already assigned.');
-        }
-        final status=(x['status']??'').toString().toLowerCase();
-        if(status=='delivered'||status=='cancelled'||status=='completed'||status=='rejected'||status=='expired'){
-          throw Exception('This order is no longer available.');
-        }
-        final approval=(p['approvalStatus']??'').toString().toLowerCase();
-        final duty=(p['status']??'').toString().toLowerCase();
-        if(approval!='approved'||duty!='online'){
-          throw Exception('You must be approved and online to accept an order.');
-        }
-        tx.update(doc.reference,{
-          'carrierUid':widget.user.uid,
-          'deliveryPartnerUid':widget.user.uid,
-          'carrierName':p['name']??p['displayName']??'ALLways Delivery Partner',
-          'carrierPhone':p['phone']??p['mobileNumber']??widget.user.phoneNumber??'',
-          'carrierVehicleType':p['vehicleType']??'bike',
-          'status':'Assigned',
-          'carrierAccepted':true,
-          'assignedAt':FieldValue.serverTimestamp(),
-          'updatedAt':FieldValue.serverTimestamp(),
-        });
-      });
+      await DeliveryService.acceptOrder(orderId:doc.id);
       _suppressAssignmentAlertId=doc.id;
       if(mounted){
         setState(()=>selectedId=doc.id);
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Order accepted.')));
       }
     }catch(e){
-      if(mounted){
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content:Text(e.toString().replaceFirst('Exception: ',''))),
-        );
-      }
+      if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text(e.toString().replaceFirst('Exception: ',''))));
     }
-  }
-  Future<void> _verifyDeliveryPinDirect(DocumentReference ref,String pin) async {
-    final snap=await ref.get();
-    final d=snap.data() as Map<String,dynamic>? ?? <String,dynamic>{};
-    final assigned=(d['carrierUid']??d['deliveryPartnerUid']??d['assignedPartnerId']??'').toString();
-    if(assigned!=widget.user.uid)throw Exception('This delivery is not assigned to you.');
-    final status=(d['status']??'').toString().toLowerCase();
-    if(status!='out for delivery')throw Exception('Delivery is not ready for confirmation.');
-    if((d['confirmationPin']??'').toString().trim()!=pin)throw Exception('Incorrect confirmation number.');
-    await ref.update({'status':'Delivered','deliveryPinVerified':true,'deliveryPinVerifiedAt':FieldValue.serverTimestamp(),'updatedAt':FieldValue.serverTimestamp()});
-    await FirebaseFirestore.instance.collection('deliveryPartners').doc(widget.user.uid).set({'pendingOrderId':null,'currentOrderId':null,'availableForDeliveries':true,'dutyStatus':'online','status':'online','updatedAt':FieldValue.serverTimestamp()},SetOptions(merge:true));
   }
 
   Future<void> _status(DocumentReference ref,String value) async {
     try{
-      if(value=='Delivered'){
+      final normalized=value.toLowerCase().trim();
+      if(normalized=='delivered'){
         final pinController=TextEditingController();
         try{
-          final pin=await showDialog<String>(
-            context:context,
-            builder:(dialogContext)=>AlertDialog(
-              title:const Text('Customer confirmation'),
-              content:TextField(controller:pinController,autofocus:true,keyboardType:TextInputType.number,maxLength:4,decoration:const InputDecoration(labelText:'4-digit confirmation number',hintText:'Enter customer PIN')),
-              actions:[
-                TextButton(onPressed:()=>Navigator.pop(dialogContext),child:const Text('Cancel')),
-                FilledButton(onPressed:()=>Navigator.pop(dialogContext,pinController.text.trim()),child:const Text('Confirm delivery')),
-              ],
-            ),
-          );
-          if(pin==null||pin.length!=4)return;
-          try{
-            final callable=FirebaseFunctions.instance.httpsCallable('verifyConfirmationPin');
-            await callable.call({'type':'delivery','id':ref.id,'pin':pin});
-          }on FirebaseFunctionsException catch(e){
-            if(e.code=='not-found'||e.code=='NOT_FOUND'||e.code=='unavailable'){
-              await _verifyDeliveryPinDirect(ref,pin);
-            }else{rethrow;}
+          final snap=await ref.get();
+          final order=snap.data()??<String,dynamic>{};
+          final isCod=(order['paymentMethod']??'COD').toString().toUpperCase()=='COD';
+          bool cashCollected=true;
+          if(isCod){
+            final confirmCash=await showDialog<bool>(context:context,builder:(d)=>AlertDialog(
+              title:const Text('Collect cash'),
+              content:Text('Collect ₹${_money(order['total'])} from the customer before completing this delivery.'),
+              actions:[TextButton(onPressed:()=>Navigator.pop(d,false),child:const Text('Cancel')),FilledButton(onPressed:()=>Navigator.pop(d,true),child:const Text('Cash collected'))],
+            ));
+            if(confirmCash!=true)return;
+            cashCollected=true;
           }
-          if(mounted){setState(() { selectedId=ref.id; tab=1; });ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('PIN verified. Delivery completed.')));}
+          final pin=await showDialog<String>(context:context,builder:(dialogContext)=>AlertDialog(
+            title:const Text('Customer confirmation'),
+            content:TextField(controller:pinController,autofocus:true,keyboardType:TextInputType.number,maxLength:4,inputFormatters:[FilteringTextInputFormatter.digitsOnly],decoration:const InputDecoration(labelText:'4-digit confirmation number',hintText:'Enter customer PIN')),
+            actions:[TextButton(onPressed:()=>Navigator.pop(dialogContext),child:const Text('Cancel')),FilledButton(onPressed:()=>Navigator.pop(dialogContext,pinController.text.trim()),child:const Text('Confirm delivery'))],
+          ));
+          if(pin==null||pin.length!=4)return;
+          await DeliveryService.verifyDeliveryPin(orderId:ref.id,pin:pin,cashCollected:cashCollected);
+          if(mounted){setState(()=>selectedId=ref.id);ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('PIN verified. Delivery completed.')));}
           return;
         }finally{pinController.dispose();}
       }
-      await ref.update({'status':value,'updatedAt':FieldValue.serverTimestamp(),'statusNote':'Updated by ALLways Delivery Partner'});
-      if(mounted)setState(() { selectedId=ref.id; tab=2; });
+      await DeliveryService.updateStatus(orderId:ref.id,status:value);
+      if(mounted){setState(()=>selectedId=ref.id);ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text('Delivery status updated to $value.')));}
     }on FirebaseFunctionsException catch(e){
-      if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text(e.message??'Could not verify the confirmation number.')));
+      if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text(e.message??'Could not update this delivery.')));
     }catch(e){
       if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text(e.toString().replaceFirst('Exception: ',''))));
     }
@@ -564,10 +597,10 @@ class _DeliveryShellState extends State<DeliveryShell>{
   @override Widget build(BuildContext context){
     final pages=[
       DeliveryHome(online:online,position:position,onOnline:_setOnline,onAccept:_accept,onSelect:(id)=>setState(()=>selectedId=id),widgetUserUid:widget.user.uid),
-      DeliveryOrders(user:widget.user,onStatus:_status,onSelect:(id)=>setState(()=>selectedId=id),onCall:_call),
+      DeliveryOrders(user:widget.user,onStatus:_status,onSelect:(id)=>setState(()=>selectedId=id),onCall:_call,onSupport:_support),
       DeliveryMap(user:widget.user,selectedId:selectedId,position:position),
       Earnings(user:widget.user),
-      Profile(user:widget.user,onSos:_sos,assignmentBeep:assignmentBeep,assignmentAudio:assignmentAudio,onAssignmentBeep:_setAssignmentBeep,onAssignmentAudio:_setAssignmentAudio,onSupport:_support),
+      Profile(user:widget.user,onSos:_sos,assignmentBeep:assignmentBeep,assignmentAudio:assignmentAudio,onAssignmentBeep:_setAssignmentBeep,onAssignmentAudio:_setAssignmentAudio,notificationsEnabled:notificationsEnabled,onNotifications:_setNotifications,onSupport:_support),
     ];
     return Scaffold(
       body:SafeArea(child:IndexedStack(index:tab,children:pages)),
@@ -606,7 +639,7 @@ class DeliveryHome extends StatelessWidget{
           final pendingAuto=assignedToMe && status=='pending_acceptance';
           if(!unassigned && !pendingAuto)continue;
           final lat=n(x['customerLatitude']??x['pickupLatitude']??x['pickupLat']);final lng=n(x['customerLongitude']??x['pickupLongitude']??x['pickupLng']);
-          if((assigned.isNotEmpty&&!pendingAuto)||status=='delivered'||status=='cancelled'||status=='completed'||status=='rejected'||status=='expired'||lat==0||lng==0)continue;
+          if((assigned.isNotEmpty&&!pendingAuto)||!['new order','searching','ready','pending','pending_acceptance','assigned'].contains(status)||status=='delivered'||status=='cancelled'||status=='completed'||status=='rejected'||status=='expired'||lat==0||lng==0)continue;
           if(Geolocator.distanceBetween(position!.latitude,position!.longitude,lat,lng)<=7000)list.add(d);
         }
         if(list.isEmpty)return const Card(child:Padding(padding:EdgeInsets.all(24),child:Center(child:Text('No nearby delivery requests within 7 km.'))));
@@ -670,8 +703,8 @@ class _OrderItemsSheet extends StatelessWidget{
 }
 
 class DeliveryOrders extends StatelessWidget{
-  final User user; final Future<void> Function(DocumentReference,String) onStatus; final void Function(String) onSelect; final Future<void> Function(String) onCall;
-  const DeliveryOrders({super.key,required this.user,required this.onStatus,required this.onSelect,required this.onCall});
+  final User user; final Future<void> Function(DocumentReference,String) onStatus; final void Function(String) onSelect; final Future<void> Function(String) onCall; final Future<void> Function({String? orderId}) onSupport;
+  const DeliveryOrders({super.key,required this.user,required this.onStatus,required this.onSelect,required this.onCall,required this.onSupport});
   num n(dynamic v)=>v is num?v:num.tryParse((v??'').toString())??0;
   DateTime stamp(Map<String,dynamic> x){
     for(final k in const ['assignedAt','deliveredAt','completedAt','updatedAt','createdAt']){
@@ -691,8 +724,11 @@ class DeliveryOrders extends StatelessWidget{
         if(!done)...[const SizedBox(width:8),Expanded(child:OutlinedButton(onPressed:()=>onSelect(d.id),child:const Text('Live map')))],
         if(!done&&phone.isNotEmpty)IconButton(tooltip:'Call customer',onPressed:()=>onCall(phone),icon:const Icon(Icons.call_outlined)),
       ]),
-      if(!done&&['assigned','pending_acceptance'].contains(status.toLowerCase()))SizedBox(width:double.infinity,child:FilledButton(onPressed:()=>onStatus(d.reference,'Out for delivery'),style:FilledButton.styleFrom(backgroundColor:blue),child:const Text('Start delivery'))),
-      if(!done&&status.toLowerCase()=='out for delivery')SizedBox(width:double.infinity,child:FilledButton(onPressed:()=>onStatus(d.reference,'Delivered'),style:FilledButton.styleFrom(backgroundColor:Colors.green),child:const Text('Mark delivered'))),
+      if(!done&&['assigned','pending_acceptance'].contains(status.toLowerCase()))SizedBox(width:double.infinity,child:FilledButton(onPressed:()=>onStatus(d.reference,'Picked Up'),style:FilledButton.styleFrom(backgroundColor:blue),child:const Text('Confirm pickup'))),
+      if(!done&&status.toLowerCase()=='picked up')SizedBox(width:double.infinity,child:FilledButton(onPressed:()=>onStatus(d.reference,'Out for delivery'),style:FilledButton.styleFrom(backgroundColor:blue),child:const Text('Start delivery'))),
+      if(!done&&status.toLowerCase()=='out for delivery')SizedBox(width:double.infinity,child:FilledButton(onPressed:()=>onStatus(d.reference,'Arrived'),style:FilledButton.styleFrom(backgroundColor:blue),child:const Text('Arrived at customer'))),
+      if(!done&&status.toLowerCase()=='arrived')SizedBox(width:double.infinity,child:FilledButton(onPressed:()=>onStatus(d.reference,'Delivered'),style:FilledButton.styleFrom(backgroundColor:Colors.green),child:const Text('Complete with PIN'))),
+      if(!done)Padding(padding:const EdgeInsets.only(top:8),child:OutlinedButton.icon(onPressed:()=>onSupport(orderId:d.id),icon:const Icon(Icons.report_problem_outlined),label:const Text('Report an issue'))),
     ])));
   }
   @override Widget build(BuildContext c)=>StreamBuilder<QuerySnapshot<Map<String,dynamic>>>(
@@ -785,12 +821,66 @@ class Pin extends StatelessWidget{final Color color;final IconData icon;const Pi
 class Earnings extends StatelessWidget{
   final User user;const Earnings({super.key,required this.user});
   num n(dynamic v)=>v is num?v:num.tryParse((v??'').toString())??0;
+  DateTime stamp(Map<String,dynamic> x){
+    final v=x['deliveredAt']??x['completedAt']??x['updatedAt']??x['createdAt'];
+    if(v is Timestamp)return v.toDate();
+    if(v is DateTime)return v;
+    if(v is num)return DateTime.fromMillisecondsSinceEpoch(v.toInt()<100000000000?v.toInt()*1000:v.toInt());
+    return DateTime.tryParse((v??'').toString())??DateTime.fromMillisecondsSinceEpoch(0);
+  }
   @override Widget build(BuildContext c)=>StreamBuilder<QuerySnapshot<Map<String,dynamic>>>(
     stream:FirebaseFirestore.instance.collection('orders').where('carrierUid',isEqualTo:user.uid).snapshots(),
-    builder:(context,s){num value=0;int done=0;for(final d in s.data?.docs??const <QueryDocumentSnapshot<Map<String,dynamic>>>[]){final x=d.data();final st=(x['status']??'').toString().toLowerCase();if(st=='delivered'||st=='completed'){done++;value+=n(x['partnerEarning']??x['deliveryEarning']??x['deliveryFee']);}}
-      return ListView(padding:const EdgeInsets.fromLTRB(16,18,16,28),children:[const Text('Earnings',style:TextStyle(fontSize:24,fontWeight:FontWeight.w900)),const SizedBox(height:12),Row(children:[Expanded(child:Card(child:Padding(padding:const EdgeInsets.all(16),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[const Icon(Icons.currency_rupee,color:blue),const SizedBox(height:8),Text('₹'+value.toStringAsFixed(0),style:const TextStyle(fontSize:24,fontWeight:FontWeight.w900)),const Text('Completed earnings',style:TextStyle(color:Colors.grey))])))),const SizedBox(width:10),Expanded(child:Card(child:Padding(padding:const EdgeInsets.all(16),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[const Icon(Icons.check_circle_outline,color:Colors.green),const SizedBox(height:8),Text(done.toString(),style:const TextStyle(fontSize:24,fontWeight:FontWeight.w900)),const Text('Completed',style:TextStyle(color:Colors.grey))]))))])]);
+    builder:(context,s){
+      final done=<QueryDocumentSnapshot<Map<String,dynamic>>>[];
+      num all=0,today=0,week=0;
+      final now=DateTime.now();final dayStart=DateTime(now.year,now.month,now.day);final weekStart=dayStart.subtract(Duration(days:now.weekday-1));
+      for(final d in s.data?.docs??const <QueryDocumentSnapshot<Map<String,dynamic>>>[]){
+        final x=d.data();final st=(x['status']??'').toString().toLowerCase();
+        if(st!='delivered'&&st!='completed')continue;
+        final earning=n(x['partnerEarning']??x['deliveryEarning']);
+        all+=earning;final at=stamp(x);if(at.isAfter(dayStart))today+=earning;if(at.isAfter(weekStart))week+=earning;done.add(d);
+      }
+      done.sort((a,b)=>stamp(b.data()).compareTo(stamp(a.data())));
+      return ListView(padding:const EdgeInsets.fromLTRB(16,18,16,28),children:[
+        const Text('Earnings',style:TextStyle(fontSize:24,fontWeight:FontWeight.w900)),const SizedBox(height:12),
+        Row(children:[
+          Expanded(child:Card(child:Padding(padding:const EdgeInsets.all(14),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[const Text('Today',style:TextStyle(color:Colors.grey)),const SizedBox(height:5),Text('₹'+today.toStringAsFixed(0),style:const TextStyle(fontSize:22,fontWeight:FontWeight.w900))])))),
+          const SizedBox(width:10),
+          Expanded(child:Card(child:Padding(padding:const EdgeInsets.all(14),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[const Text('This week',style:TextStyle(color:Colors.grey)),const SizedBox(height:5),Text('₹'+week.toStringAsFixed(0),style:const TextStyle(fontSize:22,fontWeight:FontWeight.w900))])))),
+        ]),
+        const SizedBox(height:10),
+        Card(child:ListTile(leading:const Icon(Icons.account_balance_wallet_outlined,color:blue),title:Text('₹'+all.toStringAsFixed(0),style:const TextStyle(fontSize:22,fontWeight:FontWeight.w900)),subtitle:Text(done.length.toString()+' completed deliveries • earnings supplied by ALLways operations'))),
+        const SizedBox(height:14),
+        const Text('Recent completed deliveries',style:TextStyle(fontSize:16,fontWeight:FontWeight.w800)),const SizedBox(height:8),
+        if(!s.hasData)const Center(child:CircularProgressIndicator()),
+        if(s.hasData&&done.isEmpty)const Card(child:Padding(padding:EdgeInsets.all(20),child:Text('Completed delivery earnings will appear here.'))),
+        if(s.hasData)...done.take(10).map((d){final x=d.data();return Card(margin:const EdgeInsets.only(bottom:8),child:ListTile(leading:const Icon(Icons.check_circle_outline,color:Colors.green),title:Text('#'+(x['id']??d.id).toString(),style:const TextStyle(fontWeight:FontWeight.w800)),subtitle:Text((x['customerName']??x['name']??'Customer').toString()),trailing:Text('₹'+n(x['partnerEarning']??x['deliveryEarning']).toStringAsFixed(0),style:const TextStyle(fontWeight:FontWeight.w900)));})
+      ]);
     },
   );
+}
+
+Future<void> _showPartnerDocuments(BuildContext context, User user) async {
+  showDialog(context:context,builder:(d)=>FutureBuilder<DocumentSnapshot<Map<String,dynamic>>>(
+    future:FirebaseFirestore.instance.collection('deliveryPartners').doc(user.uid).get(),
+    builder:(context,s){
+      if(!s.hasData)return const AlertDialog(content:SizedBox(height:70,child:Center(child:CircularProgressIndicator())));
+      final x=s.data!.data()??{};
+      return AlertDialog(
+        title:const Text('Documents & verification'),
+        content:SingleChildScrollView(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+          Text('Approval: '+((x['approvalStatus']??'unknown').toString()),style:const TextStyle(fontWeight:FontWeight.w800)),
+          const SizedBox(height:10),
+          Text('Vehicle type: '+((x['vehicleType']??'—').toString())),
+          Text('Vehicle number: '+((x['vehicleNumber']??'—').toString())),
+          Text('Phone: '+((x['phone']??x['mobileNumber']??'—').toString())),
+          const SizedBox(height:12),
+          const Text('Keep these details accurate. Additional KYC/document checks are controlled by ALLways operations.',style:TextStyle(color:Colors.grey)),
+        ])),
+        actions:[TextButton(onPressed:()=>Navigator.pop(d),child:const Text('Close'))],
+      );
+    },
+  ));
 }
 
 Future<void> _chooseAllwaysLanguage(BuildContext context) async {
@@ -816,16 +906,17 @@ Future<void> _chooseAllwaysLanguage(BuildContext context) async {
 }
 
 class Profile extends StatelessWidget{
-  final User user; final Future<void> Function() onSos; final bool assignmentBeep, assignmentAudio;
-  final Future<void> Function(bool) onAssignmentBeep, onAssignmentAudio; final Future<void> Function() onSupport;
-  const Profile({super.key,required this.user,required this.onSos,required this.assignmentBeep,required this.assignmentAudio,required this.onAssignmentBeep,required this.onAssignmentAudio,required this.onSupport});
+  final User user; final Future<void> Function() onSos; final bool assignmentBeep, assignmentAudio, notificationsEnabled;
+  final Future<void> Function(bool) onAssignmentBeep, onAssignmentAudio, onNotifications; final Future<void> Function({String? orderId}) onSupport;
+  const Profile({super.key,required this.user,required this.onSos,required this.assignmentBeep,required this.assignmentAudio,required this.notificationsEnabled,required this.onAssignmentBeep,required this.onAssignmentAudio,required this.onNotifications,required this.onSupport});
   @override Widget build(BuildContext c)=>ListView(padding:const EdgeInsets.fromLTRB(16,18,16,28),children:[
     const Text('Profile & Safety',style:TextStyle(fontSize:24,fontWeight:FontWeight.w900)),const SizedBox(height:12),
     Card(child:ListTile(leading:const Icon(Icons.person_outline,color:blue),title:Text(user.displayName??'Delivery Partner'),subtitle:Text(user.email??''))),
     Card(child:ListTile(leading:const Icon(Icons.language,color:blue),title:const Text('Language'),subtitle:const Text('English / हिन्दी'),trailing:const Icon(Icons.chevron_right),onTap:()=>_chooseAllwaysLanguage(c))),
-    Card(child:SwitchListTile(secondary:const Icon(Icons.notifications_active_outlined,color:blue),title:const Text('Assignment beep'),subtitle:const Text('Play a beep when a new delivery is assigned.'),value:assignmentBeep,onChanged:onAssignmentBeep)),
+    Card(child:SwitchListTile(secondary:const Icon(Icons.notifications_active_outlined,color:blue),title:const Text('Enable Notifications'),subtitle:const Text('Receive ALLways alerts and new delivery assignments.'),value:notificationsEnabled,onChanged:onNotifications)),
+    Card(child:SwitchListTile(secondary:const Icon(Icons.notifications_none_outlined,color:blue),title:const Text('Assignment beep'),subtitle:const Text('Play a beep when a new delivery is assigned.'),value:assignmentBeep,onChanged:onAssignmentBeep)),
     Card(child:SwitchListTile(secondary:const Icon(Icons.record_voice_over_outlined,color:blue),title:const Text('Assignment audio'),subtitle:const Text('Read the new assignment aloud.'),value:assignmentAudio,onChanged:onAssignmentAudio)),
-    const Card(child:ListTile(leading:Icon(Icons.description_outlined),title:Text('Documents'),subtitle:Text('Keep vehicle and verification details current.'))),
+    Card(child:ListTile(leading:const Icon(Icons.description_outlined),title:const Text('Documents'),subtitle:const Text('View your current vehicle and verification details.'),trailing:const Icon(Icons.chevron_right),onTap:()=>_showPartnerDocuments(c,user))),
     Card(child:ListTile(leading:const Icon(Icons.help_outline,color:blue),title:const Text('Help & Support'),subtitle:const Text('Send a delivery issue to ALLways operations.'),trailing:const Icon(Icons.chevron_right),onTap:onSupport)),
     Card(child:ListTile(leading:const Icon(Icons.sos,color:Colors.red),title:const Text('SOS / Emergency'),subtitle:const Text('Send an alert to ALLways operations.'),onTap:onSos)),
     Card(child:ListTile(leading:const Icon(Icons.logout),title:const Text('Sign out'),onTap:()=>FirebaseAuth.instance.signOut())),
