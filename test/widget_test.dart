@@ -9,5 +9,6 @@ void main() {
     );
     await tester.pump();
     expect(find.text('ALLways Delivery Partner'), findsOneWidget);
+    expect(find.text('Sign in with Google'), findsOneWidget);
   });
 }
