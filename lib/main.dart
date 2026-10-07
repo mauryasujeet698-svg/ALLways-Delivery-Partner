@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
@@ -567,7 +568,8 @@ class _DeliveryShellState extends State<DeliveryShell>{
     }
   }
 
-  Future<void> _status(DocumentReference ref,String value) async {
+  String _money(dynamic value){final n=value is num?value:num.tryParse((value??'').toString())??0;return n.toStringAsFixed(0);}
+  Future<void> _status(DocumentReference<Map<String,dynamic>> ref,String value) async {
     try{
       final normalized=value.toLowerCase().trim();
       if(normalized=='delivered'){
@@ -578,6 +580,7 @@ class _DeliveryShellState extends State<DeliveryShell>{
           final isCod=(order['paymentMethod']??'COD').toString().toUpperCase()=='COD';
           bool cashCollected=true;
           if(isCod){
+            if(!mounted)return;
             final confirmCash=await showDialog<bool>(context:context,builder:(d)=>AlertDialog(
               title:const Text('Collect cash'),
               content:Text('Collect ₹${_money(order['total'])} from the customer before completing this delivery.'),
@@ -586,6 +589,7 @@ class _DeliveryShellState extends State<DeliveryShell>{
             if(confirmCash!=true)return;
             cashCollected=true;
           }
+          if(!mounted)return;
           final pin=await showDialog<String>(context:context,builder:(dialogContext)=>AlertDialog(
             title:const Text('Customer confirmation'),
             content:TextField(controller:pinController,autofocus:true,keyboardType:TextInputType.number,maxLength:4,inputFormatters:[FilteringTextInputFormatter.digitsOnly],decoration:const InputDecoration(labelText:'4-digit confirmation number',hintText:'Enter customer PIN')),
@@ -889,7 +893,19 @@ class Earnings extends StatelessWidget{
         const Text('Recent completed deliveries',style:TextStyle(fontSize:16,fontWeight:FontWeight.w800)),const SizedBox(height:8),
         if(!s.hasData)const Center(child:CircularProgressIndicator()),
         if(s.hasData&&done.isEmpty)const Card(child:Padding(padding:EdgeInsets.all(20),child:Text('Completed delivery earnings will appear here.'))),
-        if(s.hasData)...done.take(10).map((d){final x=d.data();return Card(margin:const EdgeInsets.only(bottom:8),child:ListTile(leading:const Icon(Icons.check_circle_outline,color:Colors.green),title:Text('#'+(x['id']??d.id).toString(),style:const TextStyle(fontWeight:FontWeight.w800)),subtitle:Text((x['customerName']??x['name']??'Customer').toString()),trailing:Text('₹'+n(x['partnerEarning']??x['deliveryEarning']).toStringAsFixed(0),style:const TextStyle(fontWeight:FontWeight.w900)));})
+        if(s.hasData)
+          ...done.take(10).map((d){
+            final x=d.data();
+            return Card(
+              margin:const EdgeInsets.only(bottom:8),
+              child:ListTile(
+                leading:const Icon(Icons.check_circle_outline,color:Colors.green),
+                title:Text('#'+(x['id']??d.id).toString(),style:const TextStyle(fontWeight:FontWeight.w800)),
+                subtitle:Text((x['customerName']??x['name']??'Customer').toString()),
+                trailing:Text('₹'+n(x['partnerEarning']??x['deliveryEarning']).toStringAsFixed(0),style:const TextStyle(fontWeight:FontWeight.w900)),
+              ),
+            );
+          })
       ]);
     },
   );
