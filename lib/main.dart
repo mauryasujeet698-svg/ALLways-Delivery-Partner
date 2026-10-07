@@ -1,7 +1,6 @@
 import 'dart:io';
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
@@ -475,7 +474,7 @@ class _DeliveryShellState extends State<DeliveryShell>{
     String category='Order / Delivery';
     String priority='Normal';
     try{
-      final send=await showDialog<bool>(context:context,builder:(d)=>StatefulBuilder(builder:(dialogContext,setDialogState)=>AlertDialog(
+      final send=await showDialog<bool>(context:context,builder:(d)=>StatefulBuilder(builder:(_,setDialogState)=>AlertDialog(
         title:const Text('ALLways Support'),
         content:SizedBox(width:420,child:SingleChildScrollView(child:Column(mainAxisSize:MainAxisSize.min,children:[
           DropdownButtonFormField<String>(value:category,decoration:const InputDecoration(labelText:'Issue category'),items:const[
