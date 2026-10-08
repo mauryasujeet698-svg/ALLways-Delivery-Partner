@@ -115,7 +115,7 @@ jobs:
           """)
           PY
 
-          cat > android/app/src/main/kotlin/com/allways/delivery/MainActivity.kt <<'KOTLIN'
+          cat > android/app/src/main/kotlin/com/allways/allways_delivery_partner/MainActivity.kt <<'KOTLIN'
           package com.allways.delivery
           import android.app.NotificationChannel
           import android.app.NotificationManager
