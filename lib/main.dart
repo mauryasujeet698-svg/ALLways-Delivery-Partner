@@ -27,9 +27,20 @@ Future<void> _background(RemoteMessage message) async { await Firebase.initializ
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
-  await GoogleSignIn.instance.initialize();
   FirebaseMessaging.onBackgroundMessage(_background);
   runApp(const AllwaysDeliveryApp());
+}
+
+Future<void>? _googleSignInInitialization;
+
+Future<void> _initializeGoogleSignIn() {
+  return _googleSignInInitialization ??= Future<void>(() async {
+    try {
+      await GoogleSignIn.instance.initialize();
+    } catch (_) {
+      // Google Sign-In must not prevent the application from rendering.
+    }
+  });
 }
 
 class AllwaysDeliveryApp extends StatelessWidget {
@@ -82,6 +93,7 @@ class _LoginPageState extends State<LoginPage>{
   Future<void> signInWithGoogle() async {
     setState(() { busy = true; error = null; });
     try {
+      await _initializeGoogleSignIn();
       if (!GoogleSignIn.instance.supportsAuthenticate()) {
         throw Exception('Google Sign-In is not supported on this device.');
       }
