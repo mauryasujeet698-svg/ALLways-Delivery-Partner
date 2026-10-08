@@ -15,6 +15,7 @@ if 'MainActivity$InstallStatusReceiver' not in text:
 manifest.write_text(text)
 
 main = Path("android/app/src/main/kotlin/com/allways/delivery/MainActivity.kt")
+main.parent.mkdir(parents=True, exist_ok=True)
 main.write_text(r'''package com.allways.delivery
 
 import android.app.NotificationChannel
