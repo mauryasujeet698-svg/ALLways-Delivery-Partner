@@ -20,7 +20,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Prepare Windows Git Bash for Flutter Action
-        shell: cmd
+        shell: bash
         run: |
           if not exist "C:\Program Files\Git\bin\bash.exe" exit /b 1
           echo C:\Program Files\Git\bin>>"%GITHUB_PATH%"
@@ -37,7 +37,7 @@ jobs:
         shell: cmd
         run: |
           flutter create --platforms=android --org com.allways --project-name allways_delivery_partner .
-          py -3 - <<'PY'
+          python3 - <<'PY'
           from pathlib import Path
           p = Path("android/settings.gradle.kts")
           s = p.read_text()
@@ -113,6 +113,11 @@ jobs:
             </application>
           </manifest>
           """)
+          icon = Path("android/app/src/main/res/drawable/allways_delivery_partner_icon.xml")
+          icon.parent.mkdir(parents=True, exist_ok=True)
+          icon.write_text("""<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108"><path android:fillColor="#F07C22" android:pathData="M54,4A50,50 0,1 0,54 104A50,50 0,1 0,54 4"/><path android:fillColor="#FFFFFF" android:pathData="M25,32H61V69H25Z"/><path android:fillColor="#DDEBFF" android:pathData="M61,43H75L85,53V69H61Z"/><path android:fillColor="#F07C22" android:pathData="M61,43H75L85,53H61Z"/><path android:fillColor="#17324D" android:pathData="M35,67A8,8 0,1 0,51 67A8,8 0,1 0,35 67M67,67A8,8 0,1 0,83 67A8,8 0,1 0,67 67"/><path android:fillColor="#FFFFFF" android:pathData="M39,67A4,4 0,1 0,47 67A4,4 0,1 0,39 67M71,67A4,4 0,1 0,79 67A4,4 0,1 0,71 67"/><path android:fillColor="#17324D" android:pathData="M30,40H56V46H30Z"/></vector>
+          """)
+          manifest.write_text(manifest.read_text().replace('android:icon="@mipmap/ic_launcher"','android:icon="@drawable/allways_delivery_partner_icon"'))
           PY
 
           cat > android/app/src/main/kotlin/com/allways/allways_delivery_partner/MainActivity.kt <<'KOTLIN'
@@ -222,8 +227,8 @@ jobs:
           }
           KOTLIN
       - name: Configure native in-app updater
-        shell: cmd
-        run: py -3 tool/configure_android_updater.py
+        shell: bash
+        run: python3 tool/configure_android_updater.py
 
       - name: Configure release signing
         shell: bash
