@@ -721,7 +721,7 @@ class _OrderItemsSheet extends StatelessWidget{
 }
 
 class DeliveryOrders extends StatelessWidget{
-  final User user; final Future<void> Function(DocumentReference,String) onStatus; final void Function(String) onSelect; final Future<void> Function(String) onCall; final Future<void> Function({String? orderId}) onSupport;
+  final User user; final Future<void> Function(DocumentReference<Map<String,dynamic>>,String) onStatus; final void Function(String) onSelect; final Future<void> Function(String) onCall; final Future<void> Function({String? orderId}) onSupport;
   const DeliveryOrders({super.key,required this.user,required this.onStatus,required this.onSelect,required this.onCall,required this.onSupport});
   num n(dynamic v)=>v is num?v:num.tryParse((v??'').toString())??0;
   DateTime stamp(Map<String,dynamic> x){
