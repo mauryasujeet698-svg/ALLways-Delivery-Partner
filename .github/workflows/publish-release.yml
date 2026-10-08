@@ -12,7 +12,7 @@ permissions:
 jobs:
   publish:
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout build commit
         uses: actions/checkout@v4
@@ -29,26 +29,23 @@ jobs:
 
       - name: Read app version
         id: version
-        shell: pwsh
         run: |
-          $versionLine = Get-Content pubspec.yaml | Where-Object { $_ -match '^version:' } | Select-Object -First 1
-          $version = ($versionLine -split ':',2)[1].Trim().Split('+')[0]
-          if ([string]::IsNullOrWhiteSpace($version)) { throw "Could not read app version." }
-          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          VERSION=$(grep '^version:' pubspec.yaml | awk '{print $2}' | cut -d '+' -f 1)
+          test -n "$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Prepare stable release assets
-        shell: pwsh
         run: |
-          $apk = Get-ChildItem -Path release -Recurse -Filter *.apk | Select-Object -First 1
-          if (-not $apk) { throw "APK artifact not found." }
-          Copy-Item $apk.FullName "release/allways-delivery-partner-v${{ steps.version.outputs.version }}.apk"
-          Copy-Item $apk.FullName "release/allways-delivery-partner-latest.apk"
+          APK=$(find release -type f -name '*.apk' | head -n 1)
+          test -n "$APK"
+          cp "$APK" "release/allways-delivery-partner-v${{ steps.version.outputs.version }}.apk"
+          cp "$APK" "release/allways-delivery-partner-latest.apk"
 
       - name: Publish latest release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: allways-latest
-          name: "ALLways allways-delivery-partner v${{ steps.version.outputs.version }}"
+          name: "ALLways Delivery Partner v${{ steps.version.outputs.version }}"
           draft: false
           prerelease: false
           files: |
