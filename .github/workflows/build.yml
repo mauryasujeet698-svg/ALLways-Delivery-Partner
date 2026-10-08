@@ -292,7 +292,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p release-assets
-          cp build/app/outputs/flutter-apk/app-release.apk "release-assets/allways-delivery-partner-v${APP_VERSION}.apk"
+          cp build/app/outputs/flutter-apk/app-release.apk "release-assets/allways-delivery-partner-v${{ env.APP_VERSION }}.apk"
           cp build/app/outputs/flutter-apk/app-release.apk "release-assets/allways-delivery-partner-latest.apk"
 
       - name: Publish latest APK release
