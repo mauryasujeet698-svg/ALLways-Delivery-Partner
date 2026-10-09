@@ -19,14 +19,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Prepare Windows Git Bash for Flutter Action
-        shell: bash
-        run: |
-          if not exist "C:\Program Files\Git\bin\bash.exe" exit /b 1
-          echo C:\Program Files\Git\bin>>"%GITHUB_PATH%"
-          echo C:\Program Files\Git\cmd>>"%GITHUB_PATH%"
-          "C:\Program Files\Git\bin\bash.exe" --version
-
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -34,7 +26,7 @@ jobs:
           cache: true
 
       - name: Bootstrap Android
-        shell: cmd
+        shell: bash
         run: |
           flutter create --platforms=android --org com.allways --project-name allways_delivery_partner .
           python3 - <<'PY'
@@ -83,7 +75,7 @@ jobs:
           if "signingConfigs {" not in s:
               s = s.replace("android {", "android {" + chr(10) + signing, 1)
           s = s.replace('signingConfig = signingConfigs.getByName("debug")',
-              'signingConfig = if (keystorePropertiesFile.exists()) { signingConfigs.getByName("release") } else { signingConfigs.getByName("debug") }')
+              'signingConfig = signingConfigs.getByName("release")')
           s = s.replace('namespace = "com.example.delivery"', 'namespace = "com.allways.delivery"')
           s = s.replace('applicationId = "com.example.delivery"', 'applicationId = "com.allways.delivery"')
           if 'namespace = "com.allways.delivery"' not in s:
