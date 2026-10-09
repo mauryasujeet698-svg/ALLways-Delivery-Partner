@@ -28,7 +28,7 @@ jobs:
       - name: Bootstrap Android
         shell: bash
         run: |
-          flutter create --platforms=android --org com.allways --project-name allways_delivery_partner .
+          flutter create --platforms=android --org com.allways --project-name delivery .
           python3 - <<'PY'
           from pathlib import Path
           p = Path("android/settings.gradle.kts")
