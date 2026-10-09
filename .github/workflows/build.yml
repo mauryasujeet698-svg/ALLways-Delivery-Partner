@@ -112,7 +112,7 @@ jobs:
           manifest.write_text(manifest.read_text().replace('android:icon="@mipmap/ic_launcher"','android:icon="@drawable/allways_delivery_partner_icon"'))
           PY
 
-          cat > android/app/src/main/kotlin/com/allways/allways_delivery_partner/MainActivity.kt <<'KOTLIN'
+          cat > android/app/src/main/kotlin/com/allways/delivery/MainActivity.kt <<'KOTLIN'
           package com.allways.delivery
           import android.app.NotificationChannel
           import android.app.NotificationManager
