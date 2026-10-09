@@ -27,7 +27,9 @@ class DeliveryService {
       'cashCollected':cashCollected,
     });
     final payload = result.data;
-    if (payload is! Map || payload['verified'] != true) {
+    // Deployed verifyConfirmationPin currently returns {ok: true, orderId};
+    // accept that authoritative success shape as well as the older verified flag.
+    if (payload is! Map || (payload['ok'] != true && payload['verified'] != true)) {
       throw FirebaseFunctionsException(
         code: 'failed-precondition',
         message: 'The server did not confirm this PIN. Please try again.',
