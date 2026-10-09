@@ -754,11 +754,37 @@ class DeliveryOrders extends StatelessWidget{
       if(v!=null){final p=DateTime.tryParse(v.toString());if(p!=null)return p;}
     } return DateTime.fromMillisecondsSinceEpoch(0);
   }
+  DateTime? historyStamp(Map<String,dynamic> x){
+    for(final k in const ['deliveredAt','completedAt','cancelledAt','rejectedAt','expiredAt','updatedAt','createdAt','assignedAt']){
+      final v=x[k];
+      if(v is Timestamp)return v.toDate();
+      if(v is DateTime)return v;
+      if(v is num){final q=v.toInt();return DateTime.fromMillisecondsSinceEpoch(q<100000000000?q*1000:q);}
+      if(v!=null){final p=DateTime.tryParse(v.toString());if(p!=null)return p;}
+    }
+    return null;
+  }
+  bool inLastSevenIndiaDays(Map<String,dynamic> x){
+    final at=historyStamp(x);if(at==null)return false;
+    const offset=Duration(hours:5,minutes:30);
+    final now=DateTime.now().toUtc().add(offset);
+    final today=DateTime.utc(now.year,now.month,now.day);
+    final shifted=at.toUtc().add(offset);
+    final day=DateTime.utc(shifted.year,shifted.month,shifted.day);
+    final start=today.subtract(const Duration(days:6));
+    return !day.isBefore(start)&&day.isBefore(today.add(const Duration(days:1)));
+  }
+  String formatHistoryDate(DateTime? date){
+    if(date==null)return 'Time unavailable';
+    final v=date.toUtc().add(const Duration(hours:5,minutes:30));
+    return '${v.day.toString().padLeft(2,'0')}/${v.month.toString().padLeft(2,'0')}/${v.year} ${v.hour.toString().padLeft(2,'0')}:${v.minute.toString().padLeft(2,'0')} IST';
+  }
   Widget card(BuildContext c,QueryDocumentSnapshot<Map<String,dynamic>> d,bool done){
     final x=d.data(), status=(x['status']??(done?'Delivered':'Assigned')).toString(), phone=(x['phone']??x['customerPhone']??'').toString();
     return Card(margin:const EdgeInsets.only(bottom:10),child:Padding(padding:const EdgeInsets.all(14),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
       Row(children:[Expanded(child:Text('#'+(x['id']??d.id).toString(),style:const TextStyle(fontWeight:FontWeight.w900))),Text('₹'+n(x['total']).toStringAsFixed(0),style:const TextStyle(fontWeight:FontWeight.w900))]),
-      const SizedBox(height:7),Text((x['name']??x['customerName']??'Customer').toString(),style:const TextStyle(fontWeight:FontWeight.w700)),Text((x['address']??'Address unavailable').toString(),maxLines:2,overflow:TextOverflow.ellipsis),
+      const SizedBox(height:7),Text((x['name']??x['customerName']??'Customer').toString(),style:const TextStyle(fontWeight:FontWeight.w700)),Text((x['address']??x['deliveryAddress']??'Address unavailable').toString(),maxLines:2,overflow:TextOverflow.ellipsis),
+      if(done)Padding(padding:const EdgeInsets.only(top:4),child:Text(formatHistoryDate(historyStamp(x)),style:const TextStyle(color:Colors.grey,fontSize:12))),
       const SizedBox(height:8),Text(status,style:const TextStyle(color:blue,fontWeight:FontWeight.w800)),
       const SizedBox(height:10),Row(children:[
         Expanded(child:OutlinedButton(onPressed:()=>showModalBottomSheet(context:c,showDragHandle:true,builder:(_)=>_OrderItemsSheet(order:x)),child:const Text('View items'))),
@@ -776,16 +802,27 @@ class DeliveryOrders extends StatelessWidget{
     stream:FirebaseFirestore.instance.collection('orders').where('carrierUid',isEqualTo:user.uid).snapshots(),
     builder:(context,s){
       if(s.hasError)return Center(child:Text('Could not load deliveries: '+s.error.toString())); if(!s.hasData)return const Center(child:CircularProgressIndicator());
-      final active=<QueryDocumentSnapshot<Map<String,dynamic>>>[], delivered=<QueryDocumentSnapshot<Map<String,dynamic>>>[];
-      for(final d in s.data!.docs){final st=(d.data()['status']??'').toString().toLowerCase(); if({'cancelled','rejected','expired'}.contains(st))continue; if({'delivered','completed'}.contains(st))delivered.add(d);else active.add(d);}
-      active.sort((a,b)=>stamp(b.data()).compareTo(stamp(a.data())));delivered.sort((a,b)=>stamp(b.data()).compareTo(stamp(a.data())));
-      final recent=delivered.take(3).toList();
-      if(active.isEmpty&&recent.isEmpty)return const Center(child:Text('No assigned deliveries yet.'));
+      final active=<QueryDocumentSnapshot<Map<String,dynamic>>>[], history=<QueryDocumentSnapshot<Map<String,dynamic>>>[];
+      const terminal={'cancelled','canceled','rejected','expired','delivered','completed','failed'};
+      for(final d in s.data!.docs){
+        final x=d.data();final st=(x['status']??'').toString().trim().toLowerCase();
+        if(terminal.contains(st)){if(inLastSevenIndiaDays(x))history.add(d);continue;}
+        active.add(d);
+      }
+      active.sort((a,b)=>stamp(b.data()).compareTo(stamp(a.data())));
+      history.sort((a,b)=>(historyStamp(b.data())??DateTime.fromMillisecondsSinceEpoch(0)).compareTo(historyStamp(a.data())??DateTime.fromMillisecondsSinceEpoch(0)));
+      if(active.isEmpty&&history.isEmpty)return const Center(child:Text('No active deliveries or history for the last 7 calendar days.'));
       return ListView(padding:const EdgeInsets.fromLTRB(16,18,16,28),children:[
         const Text('My Deliveries',style:TextStyle(fontSize:24,fontWeight:FontWeight.w900)),const SizedBox(height:12),
         if(active.isNotEmpty)...[const Text('Assigned deliveries',style:TextStyle(fontSize:16,fontWeight:FontWeight.w800)),const SizedBox(height:8),...active.map((d)=>card(c,d,false))]
         else const Padding(padding:EdgeInsets.only(bottom:12),child:Text('No active assigned deliveries.')),
-        if(recent.isNotEmpty)...[const SizedBox(height:8),const Text('Last 3 delivered',style:TextStyle(fontSize:16,fontWeight:FontWeight.w800)),const SizedBox(height:4),const Text('Only your three most recent delivered orders are shown here.',style:TextStyle(color:Colors.grey,fontSize:12)),const SizedBox(height:8),...recent.map((d)=>card(c,d,true))],
+        const SizedBox(height:8),
+        const Text('History • last 7 calendar days',style:TextStyle(fontSize:16,fontWeight:FontWeight.w800)),
+        const SizedBox(height:4),
+        const Text('Includes completed, cancelled, rejected, expired and failed deliveries. Older records remain stored and available to Admin.',style:TextStyle(color:Colors.grey,fontSize:12)),
+        const SizedBox(height:8),
+        if(history.isEmpty)const Card(child:Padding(padding:EdgeInsets.all(18),child:Text('No delivery history in this date range.'))),
+        ...history.map((d)=>card(c,d,true)),
       ]);
     },
   );
