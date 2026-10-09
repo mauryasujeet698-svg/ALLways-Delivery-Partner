@@ -19,12 +19,19 @@ class DeliveryService {
     required bool cashCollected,
   }) async {
     final callable = _functions.httpsCallable('verifyConfirmationPin');
-    await callable.call(<String,dynamic>{
+    final result = await callable.call(<String,dynamic>{
       'type':'delivery',
       'orderId':orderId,
       'id':orderId,
       'pin':pin,
       'cashCollected':cashCollected,
     });
+    final payload = result.data;
+    if (payload is! Map || payload['verified'] != true) {
+      throw FirebaseFunctionsException(
+        code: 'failed-precondition',
+        message: 'The server did not confirm this PIN. Please try again.',
+      );
+    }
   }
 }
