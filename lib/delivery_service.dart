@@ -1,7 +1,7 @@
 import 'package:cloud_functions/cloud_functions.dart';
 
 class DeliveryService {
-  static final _functions = FirebaseFunctions.instance;
+  static final _functions = FirebaseFunctions.instanceFor(region: 'asia-south1');
 
   static Future<void> acceptOrder({required String orderId}) async {
     final callable = _functions.httpsCallable('acceptDeliveryOrder');

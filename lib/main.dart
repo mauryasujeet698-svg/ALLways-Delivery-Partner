@@ -513,10 +513,10 @@ class _DeliveryShellState extends State<DeliveryShell>{
       if(send!=true)return;
       await FirebaseFirestore.instance.collection('supportTickets').add({
         'requesterId':widget.user.uid,'requesterRole':'delivery_partner','uid':widget.user.uid,
-        'name':widget.user.displayName??'Delivery Partner','email':widget.user.email??'',
+        'name':widget.user.displayName??'Delivery Partner','requesterName':widget.user.displayName??widget.user.email??'Delivery Partner','email':widget.user.email??'',
         'subject':subject.text.trim().isEmpty?'Delivery support':subject.text.trim(),
         'message':details.text.trim(),'orderId':orderId??selectedId,'category':category,'priority':priority,
-        'queue':'Delivery Service Support','status':'open','createdAt':FieldValue.serverTimestamp(),'updatedAt':FieldValue.serverTimestamp(),
+        'queue':'Service Support','status':'open','createdAt':FieldValue.serverTimestamp(),'updatedAt':FieldValue.serverTimestamp(),
       });
       if(mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Support request sent to ALLways operations.')));
     }finally{subject.dispose();details.dispose();}
