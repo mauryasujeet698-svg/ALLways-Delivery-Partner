@@ -64,6 +64,17 @@ class AuthGate extends StatelessWidget{
  @override Widget build(BuildContext context)=>StreamBuilder<User?>(stream:FirebaseAuth.instance.authStateChanges(),builder:(context,s){
   if(s.data==null)return const LoginPage();
   return FutureBuilder<DocumentSnapshot<Map<String,dynamic>>>(future:FirebaseFirestore.instance.collection('deliveryPartners').doc(s.data!.uid).get(),builder:(context,a){
+   if(a.hasError)return Scaffold(
+    body:SafeArea(child:Center(child:Padding(padding:const EdgeInsets.all(24),child:Column(mainAxisSize:MainAxisSize.min,children:[
+     const Icon(Icons.cloud_off_rounded,size:48,color:blue),
+     const SizedBox(height:12),
+     const Text('Could not load your delivery profile',textAlign:TextAlign.center,style:TextStyle(fontSize:20,fontWeight:FontWeight.w800)),
+     const SizedBox(height:8),
+     const Text('Check your internet connection. Sign out and sign in again to retry.',textAlign:TextAlign.center),
+     const SizedBox(height:16),
+     FilledButton.icon(onPressed:()=>FirebaseAuth.instance.signOut(),icon:const Icon(Icons.logout),label:const Text('Back to sign in')),
+    ])))),
+   );
    if(!a.hasData)return const Scaffold(body:Center(child:CircularProgressIndicator()));
    if(!a.data!.exists)return PartnerRegistrationPage(user:s.data!);
    final p=a.data!.data()??{};final approval=(p['approvalStatus']??'').toString().toLowerCase();
