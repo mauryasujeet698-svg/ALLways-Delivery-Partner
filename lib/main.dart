@@ -1062,7 +1062,7 @@ Future<void> _requestDeliveryAccountDeletion(BuildContext context,User user) asy
     final profile=(await FirebaseFirestore.instance.collection('deliveryPartners').doc(user.uid).get()).data()??{};
     await FirebaseFirestore.instance.collection('supportTickets').add({
       'requesterId':user.uid,'requesterRole':'delivery_partner','requesterName':(profile['name']??user.displayName??user.email??'Delivery Partner').toString(),
-      'requesterEmail':user.email??'','queue':'Account & Privacy Support','area':'Account','category':'Account deletion',
+      'requesterEmail':user.email??'','queue':'Service Support','area':'Account','category':'Account deletion',
       'subcategory':'Account deletion request','subject':'Delivery partner account deletion request',
       'message':'I request deletion of my ALLways Delivery Partner account and associated personal data, subject to any required transaction/safety record retention.',
       'status':'open','priority':'normal','createdAt':FieldValue.serverTimestamp(),'updatedAt':FieldValue.serverTimestamp(),
