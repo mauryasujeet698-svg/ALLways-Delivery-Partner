@@ -15,6 +15,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'update_service.dart';
+import 'account_security_screen.dart';
 import 'delivery_service.dart';
 
 const blue=Color(0xFF1565C0), bg=Color(0xFFF7F8FB);
@@ -993,6 +994,7 @@ class Profile extends StatelessWidget{
     Card(child:ListTile(leading:const Icon(Icons.description_outlined),title:const Text('Documents'),subtitle:const Text('View your current vehicle and verification details.'),trailing:const Icon(Icons.chevron_right),onTap:()=>_showPartnerDocuments(c,user))),
     Card(child:ListTile(leading:const Icon(Icons.help_outline,color:blue),title:const Text('Help & Support'),subtitle:const Text('Send a delivery issue to ALLways operations.'),trailing:const Icon(Icons.chevron_right),onTap:onSupport)),
     Card(child:ListTile(leading:const Icon(Icons.sos,color:Colors.red),title:const Text('SOS / Emergency'),subtitle:const Text('Send an alert to ALLways operations.'),onTap:onSos)),
+    Card(child:ListTile(leading:const Icon(Icons.security,color:blue),title:const Text('Account & Security'),subtitle:const Text('Updates, privacy policy and account deletion.'),trailing:const Icon(Icons.chevron_right),onTap:()=>Navigator.push(c,MaterialPageRoute(builder:(_)=>AccountSecurityScreen(user:user,role:'delivery_partner',profileCollection:'deliveryPartners',repository:'mauryasujeet698-svg/ALLways-Delivery-Partner',accent:blue))))),
     Card(child:ListTile(leading:const Icon(Icons.logout),title:const Text('Sign out'),onTap:()=>FirebaseAuth.instance.signOut())),
   ]);
 }
