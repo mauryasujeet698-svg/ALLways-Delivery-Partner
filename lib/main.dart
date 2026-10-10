@@ -375,13 +375,15 @@ class _DeliveryShellState extends State<DeliveryShell>{
     final token=suppliedToken??await FirebaseMessaging.instance.getToken();
     if(token==null||token.isEmpty)return;
     final previous=prefs.getString('fcm_token');
+    // Write the replacement token first. If that write fails, keep the last
+    // known-good token so the backend can still reach this device.
+    await FirebaseFirestore.instance.collection('fcmTokens').doc(widget.user.uid).collection('tokens').doc(token).set({
+      'uid':widget.user.uid,'token':token,'role':'delivery_partner','platform':'android','notificationsEnabled':true,'updatedAt':FieldValue.serverTimestamp(),
+    },SetOptions(merge:true));
+    await prefs.setString('fcm_token',token);
     if(previous!=null&&previous.isNotEmpty&&previous!=token){
       await FirebaseFirestore.instance.collection('fcmTokens').doc(widget.user.uid).collection('tokens').doc(previous).delete().catchError((_){});
     }
-    await FirebaseFirestore.instance.collection('fcmTokens').doc(widget.user.uid).collection('tokens').doc(token).set({
-      'uid':widget.user.uid,'token':token,'role':'delivery_partner','platform':'android','updatedAt':FieldValue.serverTimestamp(),
-    },SetOptions(merge:true));
-    await prefs.setString('fcm_token',token);
   }
 
   Future<void> _removeMessagingTokens() async {
@@ -436,7 +438,12 @@ class _DeliveryShellState extends State<DeliveryShell>{
       if(initial!=null)_handleNotificationTap(initial);
       await _tokenRefreshSub?.cancel();
       _tokenRefreshSub=FirebaseMessaging.instance.onTokenRefresh.listen((token){
-        if(notificationsEnabled)_registerMessagingToken(token);
+        if(notificationsEnabled){
+          _registerMessagingToken(token).catchError((Object error, StackTrace stackTrace){
+            debugPrint('Delivery FCM token refresh write failed: ' + error.toString());
+            debugPrint(stackTrace.toString());
+          });
+        }
       });
     }catch(_){
       if(mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Notifications could not be initialized. You can retry from Profile.')));
