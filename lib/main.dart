@@ -6,6 +6,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
+import 'privacy_policy_screen.dart';
 import 'package:flutter/services.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -992,6 +993,7 @@ class Profile extends StatelessWidget{
     Card(child:SwitchListTile(secondary:const Icon(Icons.record_voice_over_outlined,color:blue),title:const Text('Assignment audio'),subtitle:const Text('Read the new assignment aloud.'),value:assignmentAudio,onChanged:onAssignmentAudio)),
     Card(child:ListTile(leading:const Icon(Icons.description_outlined),title:const Text('Documents'),subtitle:const Text('View your current vehicle and verification details.'),trailing:const Icon(Icons.chevron_right),onTap:()=>_showPartnerDocuments(c,user))),
     Card(child:ListTile(leading:const Icon(Icons.help_outline,color:blue),title:const Text('Help & Support'),subtitle:const Text('Send a delivery issue to ALLways operations.'),trailing:const Icon(Icons.chevron_right),onTap:onSupport)),
+    Card(child:ListTile(leading:const Icon(Icons.privacy_tip_outlined,color:blue),title:const Text('Privacy Policy & Terms'),subtitle:const Text('How ALLways uses account, location and delivery information.'),trailing:const Icon(Icons.chevron_right),onTap:()=>Navigator.push(c,MaterialPageRoute(builder:(_)=>const AllwaysPrivacyPolicyScreen())))),
     Card(child:ListTile(leading:const Icon(Icons.sos,color:Colors.red),title:const Text('SOS / Emergency'),subtitle:const Text('Send an alert to ALLways operations.'),onTap:onSos)),
     Card(child:ListTile(leading:const Icon(Icons.logout),title:const Text('Sign out'),onTap:()=>FirebaseAuth.instance.signOut())),
   ]);
