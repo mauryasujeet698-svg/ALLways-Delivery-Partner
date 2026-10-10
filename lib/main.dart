@@ -1019,7 +1019,7 @@ Future<void> _editDeliveryPartnerProfile(BuildContext context,User user) async {
         try{
           final picked=await ImagePicker().pickImage(source:ImageSource.gallery,imageQuality:82,maxWidth:1200);
           if(picked==null)return;
-          setD(()=>{uploading=true,error=null});
+          setD((){uploading=true;error=null;});
           final uploaded=await _uploadPartnerProfileImage(picked);
           setD(()=>photoUrl=uploaded);
         }catch(e){setD(()=>error=e.toString().replaceFirst('Exception: ',''));}
@@ -1036,7 +1036,7 @@ Future<void> _editDeliveryPartnerProfile(BuildContext context,User user) async {
         final cleanName=name.text.trim();
         final cleanPhone=phone.text.replaceAll(RegExp(r'[^0-9+]'),'');
         if(cleanName.isEmpty||cleanPhone.replaceAll(RegExp(r'\D'),'').length<10){setD(()=>error='Enter your name and a valid mobile number.');return;}
-        setD(()=>{busy=true,error=null});
+        setD((){busy=true;error=null;});
         try{
           await ref.set({'uid':user.uid,'role':'delivery_partner','name':cleanName,'displayName':cleanName,'phone':cleanPhone,'mobileNumber':cleanPhone,'profilePhotoUrl':photoUrl,'photoUrl':photoUrl,'updatedAt':FieldValue.serverTimestamp()},SetOptions(merge:true));
           await user.updateDisplayName(cleanName);
