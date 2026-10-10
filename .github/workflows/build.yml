@@ -135,6 +135,8 @@ jobs:
           class MainActivity : FlutterActivity() {
               private val channelId = "allways_urgent_v4"
               private var textToSpeech: TextToSpeech? = null
+              private var textToSpeechReady = false
+              private var pendingAssignmentSpeech: String? = null
 
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
@@ -200,15 +202,23 @@ jobs:
 
               private fun speakAssignment(text: String) {
                   if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) return
-                  if (textToSpeech == null) {
+                  val engine = textToSpeech
+                  if (engine == null) {
+                      pendingAssignmentSpeech = text
                       textToSpeech = TextToSpeech(this) { status ->
                           if (status == TextToSpeech.SUCCESS) {
+                              textToSpeechReady = true
                               textToSpeech?.language = Locale.getDefault()
-                              textToSpeech?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "allways_assignment")
+                              pendingAssignmentSpeech?.let { pending ->
+                                  textToSpeech?.speak(pending, TextToSpeech.QUEUE_FLUSH, null, "allways_assignment")
+                                  pendingAssignmentSpeech = null
+                              }
                           }
                       }
+                  } else if (!textToSpeechReady) {
+                      pendingAssignmentSpeech = text
                   } else {
-                      textToSpeech?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "allways_assignment")
+                      engine.speak(text, TextToSpeech.QUEUE_FLUSH, null, "allways_assignment")
                   }
               }
 
@@ -216,6 +226,8 @@ jobs:
                   textToSpeech?.stop()
                   textToSpeech?.shutdown()
                   textToSpeech = null
+                  textToSpeechReady = false
+                  pendingAssignmentSpeech = null
                   super.onDestroy()
               }
           }

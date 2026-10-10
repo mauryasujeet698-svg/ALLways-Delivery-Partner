@@ -27,7 +27,7 @@ class DeliveryService {
       'cashCollected':cashCollected,
     });
     final payload = result.data;
-    if (payload is! Map || payload['verified'] != true) {
+    if (payload is! Map || (payload['verified'] != true && payload['ok'] != true)) {
       throw FirebaseFunctionsException(
         code: 'failed-precondition',
         message: 'The server did not confirm this PIN. Please try again.',
