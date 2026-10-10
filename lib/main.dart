@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:async';
+import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -11,6 +12,8 @@ import 'package:google_sign_in/google_sign_in.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:http/http.dart' as http;
+import 'package:image_picker/image_picker.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -979,13 +982,115 @@ Future<void> _chooseAllwaysLanguage(BuildContext context) async {
   }
 }
 
+Future<String> _uploadPartnerProfileImage(XFile image) async {
+  final request=http.MultipartRequest('POST',Uri.parse('https://api.cloudinary.com/v1_1/busdtvia/image/upload'));
+  request.fields['upload_preset']='allways_preset';
+  request.fields['folder']='allways/partner-profiles';
+  request.files.add(await http.MultipartFile.fromPath('file',image.path));
+  final response=await request.send().timeout(const Duration(seconds:30));
+  final body=await response.stream.bytesToString();
+  dynamic decoded;
+  try{decoded=jsonDecode(body);}catch(_){}
+  if(response.statusCode<200||response.statusCode>=300){
+    final message=decoded is Map?(decoded['error'] is Map?(decoded['error']['message']??'Upload failed').toString():'Upload failed'):body;
+    throw Exception('Image upload failed: '+message);
+  }
+  final url=decoded is Map?(decoded['secure_url']??'').toString():'';
+  if(url.isEmpty)throw Exception('Image service did not return a secure image URL.');
+  return url;
+}
+
+Future<void> _editDeliveryPartnerProfile(BuildContext context,User user) async {
+  final ref=FirebaseFirestore.instance.collection('deliveryPartners').doc(user.uid);
+  Map<String,dynamic> initial={};
+  try{initial=(await ref.get()).data()??{};}catch(_){}
+  if(!context.mounted)return;
+  final name=TextEditingController(text:(initial['name']??initial['displayName']??user.displayName??'').toString());
+  final phone=TextEditingController(text:(initial['phone']??initial['mobileNumber']??user.phoneNumber??'').toString());
+  var photoUrl=(initial['profilePhotoUrl']??initial['photoUrl']??user.photoURL??'').toString();
+  var busy=false,uploading=false;
+  String? error;
+  final saved=await showDialog<bool>(context:context,builder:(dialogContext)=>StatefulBuilder(builder:(dialogContext,setD)=>AlertDialog(
+    title:const Text('Edit your profile'),
+    content:SingleChildScrollView(child:Column(mainAxisSize:MainAxisSize.min,children:[
+      CircleAvatar(radius:38,backgroundImage:photoUrl.trim().isNotEmpty?NetworkImage(photoUrl):null,child:photoUrl.trim().isEmpty?const Icon(Icons.person,size:36):null),
+      const SizedBox(height:8),
+      OutlinedButton.icon(onPressed:uploading?null:()async{
+        try{
+          final picked=await ImagePicker().pickImage(source:ImageSource.gallery,imageQuality:82,maxWidth:1200);
+          if(picked==null)return;
+          setD(()=>{uploading=true,error=null});
+          final uploaded=await _uploadPartnerProfileImage(picked);
+          setD(()=>photoUrl=uploaded);
+        }catch(e){setD(()=>error=e.toString().replaceFirst('Exception: ',''));}
+        finally{setD(()=>uploading=false);}
+      },icon:uploading?const SizedBox(width:16,height:16,child:CircularProgressIndicator(strokeWidth:2)):const Icon(Icons.photo_library_outlined),label:Text(uploading?'Uploading photo…':'Choose profile photo')),
+      TextField(controller:name,textCapitalization:TextCapitalization.words,decoration:const InputDecoration(labelText:'Full name')),
+      const SizedBox(height:8),
+      TextField(controller:phone,keyboardType:TextInputType.phone,decoration:const InputDecoration(labelText:'Mobile number')),
+      if(error!=null)Padding(padding:const EdgeInsets.only(top:10),child:Text(error!,style:const TextStyle(color:Colors.red))),
+    ])),
+    actions:[
+      TextButton(onPressed:busy?null:()=>Navigator.pop(dialogContext,false),child:const Text('Cancel')),
+      FilledButton(onPressed:busy||uploading?null:()async{
+        final cleanName=name.text.trim();
+        final cleanPhone=phone.text.replaceAll(RegExp(r'[^0-9+]'),'');
+        if(cleanName.isEmpty||cleanPhone.replaceAll(RegExp(r'\D'),'').length<10){setD(()=>error='Enter your name and a valid mobile number.');return;}
+        setD(()=>{busy=true,error=null});
+        try{
+          await ref.set({'uid':user.uid,'role':'delivery_partner','name':cleanName,'displayName':cleanName,'phone':cleanPhone,'mobileNumber':cleanPhone,'profilePhotoUrl':photoUrl,'photoUrl':photoUrl,'updatedAt':FieldValue.serverTimestamp()},SetOptions(merge:true));
+          await user.updateDisplayName(cleanName);
+          if(photoUrl.trim().isNotEmpty)await user.updatePhotoURL(photoUrl.trim());
+          if(dialogContext.mounted)Navigator.pop(dialogContext,true);
+        }catch(e){setD(()=>error=e.toString().replaceFirst('Exception: ',''));}
+        finally{setD(()=>busy=false);}
+      },child:Text(busy?'Saving…':'Save profile')),
+    ],
+  )));
+  name.dispose();phone.dispose();
+  if(saved==true&&context.mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Profile updated.')));
+}
+
+Future<void> _requestDeliveryAccountDeletion(BuildContext context,User user) async {
+  final confirm=await showDialog<bool>(context:context,builder:(d)=>AlertDialog(
+    title:const Text('Request account deletion?'),
+    content:const Text('This sends ALLways Support a request to delete your partner account and review associated personal data. Your account will remain available until the request is processed.'),
+    actions:[TextButton(onPressed:()=>Navigator.pop(d,false),child:const Text('Cancel')),FilledButton(onPressed:()=>Navigator.pop(d,true),child:const Text('Send request'))],
+  ));
+  if(confirm!=true||!context.mounted)return;
+  try{
+    final profile=(await FirebaseFirestore.instance.collection('deliveryPartners').doc(user.uid).get()).data()??{};
+    await FirebaseFirestore.instance.collection('supportTickets').add({
+      'requesterId':user.uid,'requesterRole':'delivery_partner','requesterName':(profile['name']??user.displayName??user.email??'Delivery Partner').toString(),
+      'requesterEmail':user.email??'','queue':'Account & Privacy Support','area':'Account','category':'Account deletion',
+      'subcategory':'Account deletion request','subject':'Delivery partner account deletion request',
+      'message':'I request deletion of my ALLways Delivery Partner account and associated personal data, subject to any required transaction/safety record retention.',
+      'status':'open','priority':'normal','createdAt':FieldValue.serverTimestamp(),'updatedAt':FieldValue.serverTimestamp(),
+    });
+    if(context.mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Account deletion request sent to ALLways Support.')));
+  }catch(e){if(context.mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text('Could not send deletion request: '+e.toString().replaceFirst('Exception: ',''))));}
+}
+
 class Profile extends StatelessWidget{
   final User user; final Future<void> Function() onSos; final bool assignmentBeep, assignmentAudio, notificationsEnabled;
   final Future<void> Function(bool) onAssignmentBeep, onAssignmentAudio, onNotifications; final Future<void> Function({String? orderId}) onSupport;
   const Profile({super.key,required this.user,required this.onSos,required this.assignmentBeep,required this.assignmentAudio,required this.notificationsEnabled,required this.onAssignmentBeep,required this.onAssignmentAudio,required this.onNotifications,required this.onSupport});
   @override Widget build(BuildContext c)=>ListView(padding:const EdgeInsets.fromLTRB(16,18,16,28),children:[
     const Text('Profile & Safety',style:TextStyle(fontSize:24,fontWeight:FontWeight.w900)),const SizedBox(height:12),
-    Card(child:ListTile(leading:const Icon(Icons.person_outline,color:blue),title:Text(user.displayName??'Delivery Partner'),subtitle:Text(user.email??''))),
+    StreamBuilder<DocumentSnapshot<Map<String,dynamic>>>(
+      stream:FirebaseFirestore.instance.collection('deliveryPartners').doc(user.uid).snapshots(),
+      builder:(context,snapshot){
+        final profile=snapshot.data?.data()??<String,dynamic>{};
+        final name=(profile['name']??profile['displayName']??user.displayName??'Delivery Partner').toString();
+        final phone=(profile['phone']??profile['mobileNumber']??'').toString();
+        final photo=(profile['profilePhotoUrl']??profile['photoUrl']??user.photoURL??'').toString();
+        return Card(child:ListTile(
+          leading:CircleAvatar(backgroundImage:photo.trim().isNotEmpty?NetworkImage(photo):null,child:photo.trim().isEmpty?const Icon(Icons.person_outline,color:blue):null),
+          title:Text(name),subtitle:Text(phone.isNotEmpty?phone:(user.email??'Add your mobile number')),
+          trailing:const Icon(Icons.edit_outlined),onTap:()=>_editDeliveryPartnerProfile(c,user),
+        ));
+      },
+    ),
     Card(child:ListTile(leading:const Icon(Icons.language,color:blue),title:const Text('Language'),subtitle:const Text('English / हिन्दी'),trailing:const Icon(Icons.chevron_right),onTap:()=>_chooseAllwaysLanguage(c))),
     Card(child:SwitchListTile(secondary:const Icon(Icons.notifications_active_outlined,color:blue),title:const Text('Enable Notifications'),subtitle:const Text('Receive ALLways alerts and new delivery assignments.'),value:notificationsEnabled,onChanged:onNotifications)),
     Card(child:SwitchListTile(secondary:const Icon(Icons.notifications_none_outlined,color:blue),title:const Text('Assignment beep'),subtitle:const Text('Play a beep when a new delivery is assigned.'),value:assignmentBeep,onChanged:onAssignmentBeep)),
@@ -993,6 +1098,7 @@ class Profile extends StatelessWidget{
     Card(child:ListTile(leading:const Icon(Icons.description_outlined),title:const Text('Documents'),subtitle:const Text('View your current vehicle and verification details.'),trailing:const Icon(Icons.chevron_right),onTap:()=>_showPartnerDocuments(c,user))),
     Card(child:ListTile(leading:const Icon(Icons.help_outline,color:blue),title:const Text('Help & Support'),subtitle:const Text('Send a delivery issue to ALLways operations.'),trailing:const Icon(Icons.chevron_right),onTap:onSupport)),
     Card(child:ListTile(leading:const Icon(Icons.sos,color:Colors.red),title:const Text('SOS / Emergency'),subtitle:const Text('Send an alert to ALLways operations.'),onTap:onSos)),
+    Card(child:ListTile(leading:const Icon(Icons.delete_outline,color:Colors.red),title:const Text('Delete account'),subtitle:const Text('Request deletion of your account and personal data'),onTap:()=>_requestDeliveryAccountDeletion(c,user))),
     Card(child:ListTile(leading:const Icon(Icons.logout),title:const Text('Sign out'),onTap:()=>FirebaseAuth.instance.signOut())),
   ]);
 }
