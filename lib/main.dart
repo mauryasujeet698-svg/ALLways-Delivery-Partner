@@ -853,9 +853,7 @@ class DeliveryHome extends StatelessWidget{
     Card(color:blue.withOpacity(.07),shape:RoundedRectangleBorder(borderRadius:BorderRadius.circular(22)),child:Padding(padding:const EdgeInsets.all(16),child:Row(children:[CircleAvatar(radius:26,backgroundColor:blue.withOpacity(.12),child:Icon(online?Icons.wifi_tethering:Icons.wifi_off,color:blue)),const SizedBox(width:12),Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text(online?'You are online':'You are offline',style:const TextStyle(fontSize:18,fontWeight:FontWeight.w900)),Text(online?'New delivery work can be assigned.':'Turn on duty status to receive nearby work.',style:const TextStyle(color:Colors.grey))]))]))),
     const SizedBox(height:16),
     StreamBuilder<QuerySnapshot<Map<String,dynamic>>>(
-      stream:online
-          ? FirebaseFirestore.instance.collection('orders').where('carrierUid',whereIn:[null,widgetUserUid]).snapshots()
-          : FirebaseFirestore.instance.collection('orders').where('carrierUid',isEqualTo:widgetUserUid).snapshots(),
+      stream:FirebaseFirestore.instance.collection('orders').where('carrierUid',isEqualTo:widgetUserUid).snapshots(),
       builder:(context,s){
         if(!s.hasData)return const Card(child:Padding(padding:EdgeInsets.all(24),child:Center(child:CircularProgressIndicator())));
         if(!online||position==null)return Card(child:Padding(padding:const EdgeInsets.all(24),child:Center(child:Text(online?'Waiting for live location...':'Go online to view nearby delivery requests.'))));
@@ -864,8 +862,8 @@ class DeliveryHome extends StatelessWidget{
           final x=d.data();final assigned=(x['carrierUid']??x['deliveryPartnerUid']??'').toString();final status=(x['status']??'').toString().toLowerCase();
           final assignedToMe=assigned==widgetUserUid;
           final unassigned=assigned.isEmpty;
-          final pendingAuto=assignedToMe && status=='pending_acceptance';
-          if(!unassigned && !pendingAuto)continue;
+          final pendingAuto=assignedToMe && ['pending_acceptance','assigned'].contains(status);
+          if(!pendingAuto)continue;
           final lat=n(x['customerLatitude']??x['pickupLatitude']??x['pickupLat']);final lng=n(x['customerLongitude']??x['pickupLongitude']??x['pickupLng']);
           if((assigned.isNotEmpty&&!pendingAuto)||!['new order','searching','ready','pending','pending_acceptance','assigned'].contains(status)||status=='delivered'||status=='cancelled'||status=='completed'||status=='rejected'||status=='expired'||lat==0||lng==0)continue;
           if(Geolocator.distanceBetween(position!.latitude,position!.longitude,lat,lng)<=7000)list.add(d);
