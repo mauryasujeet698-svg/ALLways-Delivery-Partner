@@ -57,7 +57,7 @@ class AllwaysDeliveryApp extends StatelessWidget {
       textTheme:GoogleFonts.poppinsTextTheme(),
       cardTheme:const CardThemeData(color:Colors.white,elevation:0,margin:EdgeInsets.zero),
     ),
-    home:const AllwaysUpdateGate(repo:'mauryasujeet698-svg/ALLways-Delivery-Partner',packageChannel:'com.allways.delivery/apk_installer',assetName:'allways-delivery-partner-latest.apk',child:AuthGate()),
+    home:const AllwaysUpdateGate(repo:'mauryasujeet698-svg/ALLways-Delivery-Partner',packageChannel:'com.allways.delivery/apk_installer',assetName:'allways-delivery-partner-latest.apk',manifestDoc:'deliveryPartnerAppUpdate',child:AuthGate()),
   );
 }
 
