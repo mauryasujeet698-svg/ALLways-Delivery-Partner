@@ -629,6 +629,7 @@ class _DeliveryShellState extends State<DeliveryShell>{
         setState(()=>selectedId=doc.id);
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Order accepted.')));
       }
+      if (online) await _startLocation(forOnline: true);
     }catch(e){
       if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text(e.toString().replaceFirst('Exception: ',''))));
     }
@@ -663,7 +664,8 @@ class _DeliveryShellState extends State<DeliveryShell>{
           ));
           if(pin==null||pin.length!=4)return;
           await DeliveryService.verifyDeliveryPin(orderId:ref.id,pin:pin,cashCollected:cashCollected);
-          if(mounted){setState(()=>selectedId=ref.id);ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('PIN verified. Delivery completed.')));}
+          if(mounted){setState(()=>selectedId=null);ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('PIN verified. Delivery completed.')));}
+          if (online) await _startLocation(forOnline: true);
           return;
         }finally{pinController.dispose();}
       }
