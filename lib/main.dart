@@ -546,16 +546,52 @@ class _DeliveryShellState extends State<DeliveryShell>{
     if(p==LocationPermission.denied)p=await Geolocator.requestPermission();
     return p!=LocationPermission.denied&&p!=LocationPermission.deniedForever;
   }
-  Future<bool> _startLocation() async {
-    if(!await _locationPermission())return false;
-    try{
-      final LocationSettings settings=Platform.isAndroid && online ? AndroidSettings(accuracy:LocationAccuracy.high,distanceFilter:10,intervalDuration:const Duration(seconds:10),foregroundNotificationConfig:const ForegroundNotificationConfig(notificationTitle:'ALLways delivery tracking',notificationText:'ALLways is sharing your location while you are online or on an active delivery.',notificationChannelName:'ALLways Delivery Tracking',enableWakeLock:true,setOngoing:true)) : const LocationSettings(accuracy:LocationAccuracy.high,distanceFilter:10);
-      final first=await Geolocator.getCurrentPosition(locationSettings:settings);
-      position=first;await _saveLocation(first);
+  Future<bool> _startLocation({bool forOnline = false}) async {
+    if (!await _locationPermission()) return false;
+    try {
+      final trackingOnline = online || forOnline;
+      final activeDelivery = selectedId != null;
+      final LocationSettings settings = Platform.isAndroid && trackingOnline
+          ? AndroidSettings(
+              // Lower-frequency tracking limits GPS and Firestore work while
+              // idle. A selected delivery gets tighter updates for tracking.
+              accuracy: activeDelivery ? LocationAccuracy.high : LocationAccuracy.medium,
+              distanceFilter: activeDelivery ? 15 : 50,
+              intervalDuration: activeDelivery
+                  ? const Duration(seconds: 10)
+                  : const Duration(seconds: 30),
+              foregroundNotificationConfig: const ForegroundNotificationConfig(
+                notificationTitle: 'ALLways delivery tracking',
+                notificationText: 'ALLways is sharing your location while you are online or on an active delivery.',
+                notificationChannelName: 'ALLways Delivery Tracking',
+                enableWakeLock: true,
+                setOngoing: true,
+              ),
+            )
+          : const LocationSettings(
+              accuracy: LocationAccuracy.medium,
+              distanceFilter: 50,
+            );
+      final first = await Geolocator.getCurrentPosition(locationSettings: settings);
+      position = first;
+      await _saveLocation(first);
       await locationSub?.cancel();
-      locationSub=Geolocator.getPositionStream(locationSettings:settings).listen((p){position=p;_saveLocation(p);if(mounted)setState((){});});
+      locationSub = Geolocator.getPositionStream(locationSettings: settings).listen(
+        (p) {
+          position = p;
+          _saveLocation(p);
+          if (mounted) setState(() {});
+        },
+        onError: (Object error) {
+          debugPrint('Delivery location stream failed: $error');
+        },
+      );
       return true;
-    }catch(_){return false;}
+    } catch (error, stackTrace) {
+      debugPrint('Delivery location startup failed: $error');
+      debugPrint(stackTrace.toString());
+      return false;
+    }
   }
   Future<void> _saveLocation(Position p) async {
     try{
@@ -575,7 +611,7 @@ class _DeliveryShellState extends State<DeliveryShell>{
     }
     if(value){
       if(!await _locationPermission()){if(mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Location permission is required before going online.')));return;}
-      if(!await _startLocation()){if(mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Live location could not be started. Turn on device location and try again.')));return;}
+      if(!await _startLocation(forOnline: true)){if(mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Live location could not be started. Turn on device location and try again.')));return;}
     }else{
       await locationSub?.cancel();
       locationSub=null;
