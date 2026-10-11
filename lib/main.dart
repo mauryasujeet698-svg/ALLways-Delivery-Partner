@@ -346,7 +346,7 @@ class DeliveryShell extends StatefulWidget {
   @override State<DeliveryShell> createState()=>_DeliveryShellState();
 }
 class _DeliveryShellState extends State<DeliveryShell>{
-  int tab=0; bool online=false; Position? position; StreamSubscription<Position>? locationSub; String? _shiftSessionId; DateTime? _lastLocationProjectionAt;
+  int tab=0; bool online=false; Position? position; StreamSubscription<Position>? locationSub; String? _shiftSessionId; DateTime? _lastLocationProjectionAt; DateTime? _lastProfileLocationAt;
   StreamSubscription<QuerySnapshot<Map<String,dynamic>>>? assignmentSub;
   StreamSubscription<RemoteMessage>? _messageSub;
   StreamSubscription<RemoteMessage>? _openedMessageSub;
@@ -636,15 +636,19 @@ class _DeliveryShellState extends State<DeliveryShell>{
       }
 
       // Compatibility path before Cloud Run/Redis is configured.
-      await FirebaseFirestore.instance.collection('deliveryPartners').doc(widget.user.uid).update({
-        'deliveryLat': p.latitude,
-        'deliveryLng': p.longitude,
-        'lastLat': p.latitude,
-        'lastLng': p.longitude,
-        'deliveryLocationUpdatedAt': FieldValue.serverTimestamp(),
-        'lastLocationAt': FieldValue.serverTimestamp(),
-        'lastSeenAt': FieldValue.serverTimestamp(),
-      });
+      if (_lastProfileLocationAt == null ||
+          now.difference(_lastProfileLocationAt!) >= const Duration(seconds: 120)) {
+        _lastProfileLocationAt = now;
+        await FirebaseFirestore.instance.collection('deliveryPartners').doc(widget.user.uid).update({
+          'deliveryLat': p.latitude,
+          'deliveryLng': p.longitude,
+          'lastLat': p.latitude,
+          'lastLng': p.longitude,
+          'deliveryLocationUpdatedAt': FieldValue.serverTimestamp(),
+          'lastLocationAt': FieldValue.serverTimestamp(),
+          'lastSeenAt': FieldValue.serverTimestamp(),
+        });
+      }
       final id = selectedId;
       if (id != null) {
         if (_lastLocationProjectionAt != null &&
