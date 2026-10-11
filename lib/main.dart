@@ -363,12 +363,17 @@ class _DeliveryShellState extends State<DeliveryShell>{
       final data=p.data()??{};
       online=(data['shiftStatus']??'').toString().toLowerCase()=='on_duty';
       _shiftSessionId=(data['shiftSessionId']??'').toString().trim().isEmpty?null:(data['shiftSessionId']??'').toString();
-      if(online){
-        final started=await _startLocation();
-        if(!started){
-          await PartnerShiftService.setShift(role:'delivery_partner',online:false).catchError((_)=>null);
-          online=false;
-          _shiftSessionId=null;
+      if (online) {
+        // Refresh the server-issued shift session before GPS resumes after restart.
+        _shiftSessionId = await PartnerShiftService.setShift(role: 'delivery_partner', online: true);
+        final started = await _startLocation();
+        if (!started) {
+          await locationSub?.cancel();
+          locationSub = null;
+          position = null;
+          await PartnerShiftService.setShift(role: 'delivery_partner', online: false).catchError((_) => null);
+          online = false;
+          _shiftSessionId = null;
         }
       }
     }catch(_){}
@@ -611,6 +616,7 @@ class _DeliveryShellState extends State<DeliveryShell>{
         latitude: p.latitude,
         longitude: p.longitude,
         shiftSessionId: _shiftSessionId,
+        activeJobId: selectedId,
       );
       final now = DateTime.now();
       if (indexed) {
