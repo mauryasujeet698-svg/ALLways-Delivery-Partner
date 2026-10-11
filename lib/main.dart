@@ -20,7 +20,10 @@ import 'account_security_screen.dart';
 import 'shift_service.dart';
 
 const blue=Color(0xFF1565C0), bg=Color(0xFFF7F8FB);
-const _openStreetMapTilesUrl = 'https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png';
+const _openStreetMapTilesUrl = String.fromEnvironment(
+  'MAP_TILE_URL',
+  defaultValue: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+);
 const _allwaysNotificationChannel = MethodChannel('allways_notifications');
 @pragma('vm:entry-point')
 Future<void> _background(RemoteMessage message) async { await Firebase.initializeApp(); }
@@ -1030,7 +1033,7 @@ class _DeliveryMapState extends State<DeliveryMap>{
           ),
           children:[
             TileLayer(urlTemplate: _openStreetMapTilesUrl,maxZoom:19,userAgentPackageName:'com.allways.delivery'),
-            RichAttributionWidget(attributions: const [TextSourceAttribution('© OpenStreetMap contributors'), TextSourceAttribution('© CARTO')]),
+            RichAttributionWidget(attributions: const [TextSourceAttribution('© OpenStreetMap contributors')]),
             MarkerLayer(markers:markers),
           ],
         ),
