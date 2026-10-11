@@ -604,7 +604,7 @@ class _DeliveryShellState extends State<DeliveryShell>{
     if (value) {
       final profile = await FirebaseFirestore.instance.collection('deliveryPartners').doc(widget.user.uid).get();
       final approval = (profile.data()?['approvalStatus'] ?? '').toString().toLowerCase();
-      if (approval.isNotEmpty && approval != 'approved') {
+      if (approval != 'approved') {
         if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Admin approval is required before going online.')));
         return;
       }
@@ -719,7 +719,9 @@ class DeliveryHome extends StatelessWidget{
     Card(color:blue.withOpacity(.07),shape:RoundedRectangleBorder(borderRadius:BorderRadius.circular(22)),child:Padding(padding:const EdgeInsets.all(16),child:Row(children:[CircleAvatar(radius:26,backgroundColor:blue.withOpacity(.12),child:Icon(online?Icons.wifi_tethering:Icons.wifi_off,color:blue)),const SizedBox(width:12),Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text(online?'You are online':'You are offline',style:const TextStyle(fontSize:18,fontWeight:FontWeight.w900)),Text(online?'New delivery work can be assigned.':'Turn on duty status to receive nearby work.',style:const TextStyle(color:Colors.grey))]))]))),
     const SizedBox(height:16),
     StreamBuilder<QuerySnapshot<Map<String,dynamic>>>(
-      stream:FirebaseFirestore.instance.collection('orders').snapshots(),
+      stream:online
+          ? FirebaseFirestore.instance.collection('orders').where('carrierUid',whereIn:[null,widgetUserUid]).snapshots()
+          : FirebaseFirestore.instance.collection('orders').where('carrierUid',isEqualTo:widgetUserUid).snapshots(),
       builder:(context,s){
         if(!s.hasData)return const Card(child:Padding(padding:EdgeInsets.all(24),child:Center(child:CircularProgressIndicator())));
         if(!online||position==null)return Card(child:Padding(padding:const EdgeInsets.all(24),child:Center(child:Text(online?'Waiting for live location...':'Go online to view nearby delivery requests.'))));
