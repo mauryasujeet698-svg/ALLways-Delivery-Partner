@@ -670,7 +670,13 @@ class _DeliveryShellState extends State<DeliveryShell>{
         }finally{pinController.dispose();}
       }
       await DeliveryService.updateStatus(orderId:ref.id,status:value);
-      if(mounted){setState(()=>selectedId=ref.id);ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text('Delivery status updated to $value.')));}
+      final normalizedStatus = value.toLowerCase().trim();
+      final terminalStatus = const {'delivered','completed','cancelled','rejected','expired'}.contains(normalizedStatus);
+      if (mounted) setState(() => selectedId = terminalStatus ? null : ref.id);
+      if (online && (terminalStatus || const {'picked up','out for delivery'}.contains(normalizedStatus))) {
+        await _startLocation(forOnline: true);
+      }
+      if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text('Delivery status updated to $value.')));
     }on FirebaseFunctionsException catch(e){
       if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text(e.message??'Could not update this delivery.')));
     }catch(e){
