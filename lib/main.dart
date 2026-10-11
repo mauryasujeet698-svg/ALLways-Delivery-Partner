@@ -861,7 +861,6 @@ class DeliveryHome extends StatelessWidget{
         for(final d in s.data!.docs){
           final x=d.data();final assigned=(x['carrierUid']??x['deliveryPartnerUid']??'').toString();final status=(x['status']??'').toString().toLowerCase();
           final assignedToMe=assigned==widgetUserUid;
-          final unassigned=assigned.isEmpty;
           final pendingAuto=assignedToMe && ['pending_acceptance','assigned'].contains(status);
           if(!pendingAuto)continue;
           final lat=n(x['customerLatitude']??x['pickupLatitude']??x['pickupLat']);final lng=n(x['customerLongitude']??x['pickupLongitude']??x['pickupLng']);
