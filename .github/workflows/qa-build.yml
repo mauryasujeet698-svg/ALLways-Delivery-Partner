@@ -36,26 +36,15 @@ jobs:
         run: flutter create --platforms=android --org com.allways --project-name delivery .
 
       - name: Bound Gradle memory for hosted runner
+        shell: bash
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-          p = Path("android/gradle.properties")
-          text = p.read_text() if p.exists() else ""
-          line = "org.gradle.jvmargs=-Xmx3G -XX:MaxMetaspaceSize=1G -XX:ReservedCodeCacheSize=256m -XX:+HeapDumpOnOutOfMemoryError"
-          if re.search(r"^org\\.gradle\\.jvmargs=.*$", text, re.M):
-              text = re.sub(r"^org\\.gradle\\.jvmargs=.*$", line, text, count=1, flags=re.M)
-          else:
-              text += "\\n" + line + "\\n"
-          for key, value in (("org.gradle.workers.max", "2"), ("org.gradle.parallel", "false")):
-              pattern = rf"^{re.escape(key)}=.*$"
-              setting = f"{key}={value}"
-              if re.search(pattern, text, re.M):
-                  text = re.sub(pattern, setting, text, count=1, flags=re.M)
-              else:
-                  text += setting + "\\n"
-          p.write_text(text)
-          PY
+          if grep -q '^org.gradle.jvmargs=' android/gradle.properties; then
+            sed -i 's|^org.gradle.jvmargs=.*|org.gradle.jvmargs=-Xmx3G -XX:MaxMetaspaceSize=1G -XX:ReservedCodeCacheSize=256m -XX:+HeapDumpOnOutOfMemoryError|' android/gradle.properties
+          else
+            echo 'org.gradle.jvmargs=-Xmx3G -XX:MaxMetaspaceSize=1G -XX:ReservedCodeCacheSize=256m -XX:+HeapDumpOnOutOfMemoryError' >> android/gradle.properties
+          fi
+          grep -q '^org.gradle.workers.max=' android/gradle.properties || echo 'org.gradle.workers.max=2' >> android/gradle.properties
+          grep -q '^org.gradle.parallel=' android/gradle.properties || echo 'org.gradle.parallel=false' >> android/gradle.properties
 
       - name: Install dependencies
         run: flutter pub get
