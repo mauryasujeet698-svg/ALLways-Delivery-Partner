@@ -2,7 +2,7 @@ name: ALLways Delivery Partner QA Build
 
 on:
   push:
-    branches: [audit-implementation-2026-10, fix/fcm-token-refresh-resilience]
+    branches: [audit-implementation-2026-10]
   pull_request:
     paths:
       - "lib/**"
