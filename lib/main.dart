@@ -20,8 +20,7 @@ import 'account_security_screen.dart';
 import 'shift_service.dart';
 
 const blue=Color(0xFF1565C0), bg=Color(0xFFF7F8FB);
-const _mapboxPublicToken = String.fromEnvironment('MAPBOX_PUBLIC_TOKEN');
-const _mapboxTilesUrl = 'https://api.mapbox.com/styles/v1/mapbox/streets-v12/tiles/256/{z}/{x}/{y}?access_token=' + _mapboxPublicToken;
+const _openStreetMapTilesUrl = 'https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png';
 const _allwaysNotificationChannel = MethodChannel('allways_notifications');
 @pragma('vm:entry-point')
 Future<void> _background(RemoteMessage message) async { await Firebase.initializeApp(); }
@@ -1030,7 +1029,8 @@ class _DeliveryMapState extends State<DeliveryMap>{
             onMapReady:(){_ready=true;if(me!=null)_focus(me,destination);},
           ),
           children:[
-            TileLayer(urlTemplate: _mapboxTilesUrl,maxZoom:19,userAgentPackageName:'com.allways.delivery'),
+            TileLayer(urlTemplate: _openStreetMapTilesUrl,maxZoom:19,userAgentPackageName:'com.allways.delivery'),
+            RichAttributionWidget(attributions: const [TextSourceAttribution('© OpenStreetMap contributors'), TextSourceAttribution('© CARTO')]),
             MarkerLayer(markers:markers),
           ],
         ),
