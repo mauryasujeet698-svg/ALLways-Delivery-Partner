@@ -2,6 +2,8 @@ name: ALLways Delivery Partner Android
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
@@ -360,6 +362,7 @@ jobs:
           cp "release-assets/allways-delivery-partner-v${{ env.APP_VERSION }}.apk" "release-assets/allways-delivery-partner-latest.apk"
 
       - name: Publish latest APK release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v3
         with:
           tag_name: allways-latest
