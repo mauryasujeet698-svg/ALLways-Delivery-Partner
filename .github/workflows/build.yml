@@ -353,7 +353,7 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect
           script: |
-            set -euo pipefail
+            set -eu
             adb wait-for-device
             ready=0
             for attempt in $(seq 1 90); do
