@@ -16,10 +16,14 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'update_service.dart';
 import 'delivery_service.dart';
+import 'account_security_screen.dart';
+import 'shift_service.dart';
 
 const blue=Color(0xFF1565C0), bg=Color(0xFFF7F8FB);
-const _mapboxPublicToken = String.fromEnvironment('MAPBOX_PUBLIC_TOKEN');
-const _mapboxTilesUrl = 'https://api.mapbox.com/styles/v1/mapbox/streets-v12/tiles/256/{z}/{x}/{y}?access_token=' + _mapboxPublicToken;
+const _openStreetMapTilesUrl = String.fromEnvironment(
+  'MAP_TILE_URL',
+  defaultValue: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+);
 const _allwaysNotificationChannel = MethodChannel('allways_notifications');
 @pragma('vm:entry-point')
 Future<void> _background(RemoteMessage message) async { await Firebase.initializeApp(); }
@@ -55,7 +59,7 @@ class AllwaysDeliveryApp extends StatelessWidget {
       textTheme:GoogleFonts.poppinsTextTheme(),
       cardTheme:const CardThemeData(color:Colors.white,elevation:0,margin:EdgeInsets.zero),
     ),
-    home:const AllwaysUpdateGate(repo:'mauryasujeet698-svg/ALLways-Delivery-Partner',packageChannel:'com.allways.delivery/apk_installer',assetName:'allways-delivery-partner-latest.apk',child:AuthGate()),
+    home:const AllwaysUpdateGate(repo:'mauryasujeet698-svg/ALLways-Delivery-Partner',packageChannel:'com.allways.delivery/apk_installer',assetName:'allways-delivery-partner-latest.apk',manifestDoc:'deliveryPartnerAppUpdate',child:AuthGate()),
   );
 }
 
@@ -344,7 +348,7 @@ class DeliveryShell extends StatefulWidget {
   @override State<DeliveryShell> createState()=>_DeliveryShellState();
 }
 class _DeliveryShellState extends State<DeliveryShell>{
-  int tab=0; bool online=false; Position? position; StreamSubscription<Position>? locationSub;
+  int tab=0; bool online=false; Position? position; StreamSubscription<Position>? locationSub; String? _shiftSessionId; DateTime? _lastLocationProjectionAt; DateTime? _lastProfileLocationAt;
   StreamSubscription<QuerySnapshot<Map<String,dynamic>>>? assignmentSub;
   StreamSubscription<RemoteMessage>? _messageSub;
   StreamSubscription<RemoteMessage>? _openedMessageSub;
@@ -359,8 +363,21 @@ class _DeliveryShellState extends State<DeliveryShell>{
     try{
       final p=await FirebaseFirestore.instance.collection('deliveryPartners').doc(widget.user.uid).get();
       final data=p.data()??{};
-      online=((data['dutyStatus']??data['status']??'offline').toString().toLowerCase()=='online');
-      if(online)await _startLocation();
+      online=(data['shiftStatus']??'').toString().toLowerCase()=='on_duty';
+      _shiftSessionId=(data['shiftSessionId']??'').toString().trim().isEmpty?null:(data['shiftSessionId']??'').toString();
+      if (online) {
+        // Refresh the server-issued shift session before GPS resumes after restart.
+        _shiftSessionId = await PartnerShiftService.setShift(role: 'delivery_partner', online: true);
+        final started = await _startLocation();
+        if (!started) {
+          await locationSub?.cancel();
+          locationSub = null;
+          position = null;
+          await PartnerShiftService.setShift(role: 'delivery_partner', online: false).catchError((_) => null);
+          online = false;
+          _shiftSessionId = null;
+        }
+      }
     }catch(_){}
     if(mounted)setState((){});
   }
@@ -375,13 +392,15 @@ class _DeliveryShellState extends State<DeliveryShell>{
     final token=suppliedToken??await FirebaseMessaging.instance.getToken();
     if(token==null||token.isEmpty)return;
     final previous=prefs.getString('fcm_token');
+    // Write the replacement token first. If that write fails, keep the last
+    // known-good token so the backend can still reach this device.
+    await FirebaseFirestore.instance.collection('fcmTokens').doc(widget.user.uid).collection('tokens').doc(token).set({
+      'uid':widget.user.uid,'token':token,'role':'delivery_partner','platform':'android','notificationsEnabled':true,'updatedAt':FieldValue.serverTimestamp(),
+    },SetOptions(merge:true));
+    await prefs.setString('fcm_token',token);
     if(previous!=null&&previous.isNotEmpty&&previous!=token){
       await FirebaseFirestore.instance.collection('fcmTokens').doc(widget.user.uid).collection('tokens').doc(previous).delete().catchError((_){});
     }
-    await FirebaseFirestore.instance.collection('fcmTokens').doc(widget.user.uid).collection('tokens').doc(token).set({
-      'uid':widget.user.uid,'token':token,'role':'delivery_partner','platform':'android','updatedAt':FieldValue.serverTimestamp(),
-    },SetOptions(merge:true));
-    await prefs.setString('fcm_token',token);
   }
 
   Future<void> _removeMessagingTokens() async {
@@ -436,7 +455,12 @@ class _DeliveryShellState extends State<DeliveryShell>{
       if(initial!=null)_handleNotificationTap(initial);
       await _tokenRefreshSub?.cancel();
       _tokenRefreshSub=FirebaseMessaging.instance.onTokenRefresh.listen((token){
-        if(notificationsEnabled)_registerMessagingToken(token);
+        if(notificationsEnabled){
+          _registerMessagingToken(token).catchError((Object error, StackTrace stackTrace){
+            debugPrint('Delivery FCM token refresh write failed: ' + error.toString());
+            debugPrint(stackTrace.toString());
+          });
+        }
       });
     }catch(_){
       if(mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Notifications could not be initialized. You can retry from Profile.')));
@@ -539,45 +563,204 @@ class _DeliveryShellState extends State<DeliveryShell>{
     if(p==LocationPermission.denied)p=await Geolocator.requestPermission();
     return p!=LocationPermission.denied&&p!=LocationPermission.deniedForever;
   }
-  Future<bool> _startLocation() async {
-    if(!await _locationPermission())return false;
-    try{
-      final LocationSettings settings=Platform.isAndroid && online ? AndroidSettings(accuracy:LocationAccuracy.high,distanceFilter:10,intervalDuration:const Duration(seconds:10),foregroundNotificationConfig:const ForegroundNotificationConfig(notificationTitle:'ALLways delivery tracking',notificationText:'ALLways is sharing your location while you are online or on an active delivery.',notificationChannelName:'ALLways Delivery Tracking',enableWakeLock:true,setOngoing:true)) : const LocationSettings(accuracy:LocationAccuracy.high,distanceFilter:10);
-      final first=await Geolocator.getCurrentPosition(locationSettings:settings);
-      position=first;await _saveLocation(first);
+  Future<bool> _startLocation({bool forOnline = false}) async {
+    if (!await _locationPermission()) return false;
+    try {
+      final trackingOnline = online || forOnline;
+      final activeDelivery = selectedId != null;
+      final LocationSettings settings = Platform.isAndroid && trackingOnline
+          ? AndroidSettings(
+              // Lower-frequency tracking limits GPS and Firestore work while
+              // idle. A selected delivery gets tighter updates for tracking.
+              accuracy: activeDelivery ? LocationAccuracy.high : LocationAccuracy.medium,
+              distanceFilter: activeDelivery ? 15 : 50,
+              intervalDuration: activeDelivery
+                  ? const Duration(seconds: 10)
+                  : const Duration(seconds: 30),
+              foregroundNotificationConfig: const ForegroundNotificationConfig(
+                notificationTitle: 'ALLways delivery tracking',
+                notificationText: 'ALLways is sharing your location while you are online or on an active delivery.',
+                notificationChannelName: 'ALLways Delivery Tracking',
+                enableWakeLock: true,
+                setOngoing: true,
+              ),
+            )
+          : const LocationSettings(
+              accuracy: LocationAccuracy.medium,
+              distanceFilter: 50,
+            );
+      final first = await Geolocator.getCurrentPosition(locationSettings: settings);
+      position = first;
+      await _saveLocation(first);
       await locationSub?.cancel();
-      locationSub=Geolocator.getPositionStream(locationSettings:settings).listen((p){position=p;_saveLocation(p);if(mounted)setState((){});});
+      locationSub = Geolocator.getPositionStream(locationSettings: settings).listen(
+        (p) {
+          position = p;
+          _saveLocation(p);
+          if (mounted) setState(() {});
+        },
+        onError: (Object error) {
+          debugPrint('Delivery location stream failed: $error');
+        },
+      );
       return true;
-    }catch(_){return false;}
+    } catch (error, stackTrace) {
+      debugPrint('Delivery location startup failed: $error');
+      debugPrint(stackTrace.toString());
+      return false;
+    }
   }
   Future<void> _saveLocation(Position p) async {
-    try{
-      final data={'deliveryLat':p.latitude,'deliveryLng':p.longitude,'lastLat':p.latitude,'lastLng':p.longitude,'deliveryLocationUpdatedAt':FieldValue.serverTimestamp(),'lastLocationAt':FieldValue.serverTimestamp(),'isOnline':online};
-      await FirebaseFirestore.instance.collection('deliveryPartners').doc(widget.user.uid).set({...data,'uid':widget.user.uid,'status':online?'online':'offline','availableForDeliveries':online,'isOnline':online},SetOptions(merge:true));
-      if(selectedId!=null)await FirebaseFirestore.instance.collection('orders').doc(selectedId).set({'carrierLat':p.latitude,'carrierLng':p.longitude,'carrierLocationUpdatedAt':FieldValue.serverTimestamp()},SetOptions(merge:true));
-    }catch(_){}
+    if (!online && selectedId == null) return;
+    try {
+      final indexed = await PartnerShiftService.updateLocation(
+        role: 'delivery_partner',
+        latitude: p.latitude,
+        longitude: p.longitude,
+        shiftSessionId: _shiftSessionId,
+        activeJobId: selectedId,
+      );
+      final now = DateTime.now();
+      if (indexed) {
+        // High-frequency presence stays in the H3/Redis index. Firestore only
+        // receives a rate-limited projection while an active delivery is tracked.
+        final id = selectedId;
+        if (id == null || id.isEmpty) return;
+        if (_lastLocationProjectionAt != null &&
+            now.difference(_lastLocationProjectionAt!) < const Duration(seconds: 15)) return;
+        _lastLocationProjectionAt = now;
+        await FirebaseFirestore.instance.collection('orders').doc(id).update({
+          'carrierLat': p.latitude,
+          'carrierLng': p.longitude,
+          'carrierLocationUpdatedAt': FieldValue.serverTimestamp(),
+        });
+        return;
+      }
+
+      // Compatibility path before Cloud Run/Redis is configured.
+      if (_lastProfileLocationAt == null ||
+          now.difference(_lastProfileLocationAt!) >= const Duration(seconds: 120)) {
+        _lastProfileLocationAt = now;
+        await FirebaseFirestore.instance.collection('deliveryPartners').doc(widget.user.uid).update({
+          'deliveryLat': p.latitude,
+          'deliveryLng': p.longitude,
+          'lastLat': p.latitude,
+          'lastLng': p.longitude,
+          'deliveryLocationUpdatedAt': FieldValue.serverTimestamp(),
+          'lastLocationAt': FieldValue.serverTimestamp(),
+          'lastSeenAt': FieldValue.serverTimestamp(),
+        });
+      }
+      final id = selectedId;
+      if (id != null) {
+        if (_lastLocationProjectionAt != null &&
+            now.difference(_lastLocationProjectionAt!) < const Duration(seconds: 15)) return;
+        _lastLocationProjectionAt = now;
+        await FirebaseFirestore.instance.collection('orders').doc(id).update({
+          'carrierLat': p.latitude,
+          'carrierLng': p.longitude,
+          'carrierLocationUpdatedAt': FieldValue.serverTimestamp(),
+        });
+      }
+    } catch (error) {
+      debugPrint('Delivery location update failed: $error');
+    }
   }
+
   Future<void> _setOnline(bool value) async {
+    if (value == online) return;
     if (value) {
-      final profile = await FirebaseFirestore.instance.collection('deliveryPartners').doc(widget.user.uid).get();
-      final approval = (profile.data()?['approvalStatus'] ?? '').toString().toLowerCase();
-      if (approval.isNotEmpty && approval != 'approved') {
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Admin approval is required before going online.')));
+      try {
+        final profile = await FirebaseFirestore.instance.collection('deliveryPartners').doc(widget.user.uid).get();
+        final approval = (profile.data()?['approvalStatus'] ?? '').toString().toLowerCase();
+        if (approval != 'approved') {
+          if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Admin approval is required before going online.')),
+          );
+          return;
+        }
+        if (!await _locationPermission()) {
+          if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Location permission is required before going online.')),
+          );
+          return;
+        }
+        _shiftSessionId = await PartnerShiftService.setShift(role: 'delivery_partner', online: true);
+        if (!mounted) return;
+        setState(() => online = true);
+        final started = await _startLocation(forOnline: true);
+        if (!started || position == null || locationSub == null) {
+          await locationSub?.cancel();
+          locationSub = null;
+          position = null;
+          setState(() => online = false);
+          _shiftSessionId = null;
+          await PartnerShiftService.setShift(role: 'delivery_partner', online: false);
+          if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Location could not start, so your shift was closed. Check GPS and try again.')),
+          );
+        }
+      } catch (error) {
+        await locationSub?.cancel();
+        locationSub = null;
+        position = null;
+        _shiftSessionId = null;
+        if (mounted) setState(() => online = false);
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(error.toString().replaceFirst('Exception: ', ''))),
+        );
+      }
+      return;
+    }
+
+    if (selectedId != null) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Complete or resolve the active delivery before ending your shift.')),
+      );
+      return;
+    }
+    // Close the device location stream immediately; then confirm the shift end
+    // with the server. The scheduled stale-shift job is the recovery path offline.
+    await locationSub?.cancel();
+    locationSub = null;
+    position = null;
+    _shiftSessionId = null;
+    if (mounted) setState(() => online = false);
+    try {
+      await PartnerShiftService.setShift(role: 'delivery_partner', online: false);
+    } catch (error) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Location stopped on this device. Reconnect and retry ending your shift so the server can confirm it.')),
+      );
+    }
+  }
+
+  Future<void> _signOut() async {
+    if (selectedId != null) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please complete or resolve the active delivery before signing out.')),
+      );
+      return;
+    }
+    await locationSub?.cancel();
+    locationSub = null;
+    position = null;
+    if (online) {
+      if (mounted) setState(() => online = false);
+      try {
+        await PartnerShiftService.setShift(role: 'delivery_partner', online: false);
+        _shiftSessionId = null;
+      } catch (_) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not confirm that your shift ended. Stay signed in and retry while connected.')),
+        );
+        if (mounted) setState(() => online = true);
         return;
       }
     }
-    if(value){
-      if(!await _locationPermission()){if(mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Location permission is required before going online.')));return;}
-      if(!await _startLocation()){if(mounted)ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Live location could not be started. Turn on device location and try again.')));return;}
-    }else{
-      await locationSub?.cancel();
-      locationSub=null;
-      position=null;
-    }
-    final data={'status':value?'online':'offline','dutyStatus':value?'online':'offline','availableForDeliveries':value,'statusUpdatedAt':FieldValue.serverTimestamp()};
-    await FirebaseFirestore.instance.collection('deliveryPartners').doc(widget.user.uid).set({...data,'uid':widget.user.uid,'availableForDeliveries':value,'isOnline':value},SetOptions(merge:true));
-    if(mounted)setState(()=>online=value);
+    await FirebaseAuth.instance.signOut();
   }
+
   Future<void> _accept(QueryDocumentSnapshot<Map<String,dynamic>> doc) async {
     try{
       await DeliveryService.acceptOrder(orderId:doc.id);
@@ -586,6 +769,7 @@ class _DeliveryShellState extends State<DeliveryShell>{
         setState(()=>selectedId=doc.id);
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Order accepted.')));
       }
+      if (online) await _startLocation(forOnline: true);
     }catch(e){
       if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text(e.toString().replaceFirst('Exception: ',''))));
     }
@@ -620,12 +804,19 @@ class _DeliveryShellState extends State<DeliveryShell>{
           ));
           if(pin==null||pin.length!=4)return;
           await DeliveryService.verifyDeliveryPin(orderId:ref.id,pin:pin,cashCollected:cashCollected);
-          if(mounted){setState(()=>selectedId=ref.id);ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('PIN verified. Delivery completed.')));}
+          if(mounted){setState(()=>selectedId=null);ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('PIN verified. Delivery completed.')));}
+          if (online) await _startLocation(forOnline: true);
           return;
         }finally{pinController.dispose();}
       }
       await DeliveryService.updateStatus(orderId:ref.id,status:value);
-      if(mounted){setState(()=>selectedId=ref.id);ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text('Delivery status updated to $value.')));}
+      final normalizedStatus = value.toLowerCase().trim();
+      final terminalStatus = const {'delivered','completed','cancelled','rejected','expired'}.contains(normalizedStatus);
+      if (mounted) setState(() => selectedId = terminalStatus ? null : ref.id);
+      if (online && (terminalStatus || const {'picked up','out for delivery'}.contains(normalizedStatus))) {
+        await _startLocation(forOnline: true);
+      }
+      if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text('Delivery status updated to $value.')));
     }on FirebaseFunctionsException catch(e){
       if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text(e.message??'Could not update this delivery.')));
     }catch(e){
@@ -641,7 +832,7 @@ class _DeliveryShellState extends State<DeliveryShell>{
       DeliveryOrders(user:widget.user,onStatus:_status,onSelect:(id)=>setState(()=>selectedId=id),onCall:_call,onSupport:_support),
       DeliveryMap(user:widget.user,selectedId:selectedId,position:position),
       Earnings(user:widget.user),
-      Profile(user:widget.user,onSos:_sos,assignmentBeep:assignmentBeep,assignmentAudio:assignmentAudio,onAssignmentBeep:_setAssignmentBeep,onAssignmentAudio:_setAssignmentAudio,notificationsEnabled:notificationsEnabled,onNotifications:_setNotifications,onSupport:_support),
+      Profile(user:widget.user,onSos:_sos,assignmentBeep:assignmentBeep,assignmentAudio:assignmentAudio,onAssignmentBeep:_setAssignmentBeep,onAssignmentAudio:_setAssignmentAudio,notificationsEnabled:notificationsEnabled,onNotifications:_setNotifications,onSupport:_support,onSignOut:_signOut),
     ];
     return Scaffold(
       body:SafeArea(child:IndexedStack(index:tab,children:pages)),
@@ -668,7 +859,7 @@ class DeliveryHome extends StatelessWidget{
     Card(color:blue.withOpacity(.07),shape:RoundedRectangleBorder(borderRadius:BorderRadius.circular(22)),child:Padding(padding:const EdgeInsets.all(16),child:Row(children:[CircleAvatar(radius:26,backgroundColor:blue.withOpacity(.12),child:Icon(online?Icons.wifi_tethering:Icons.wifi_off,color:blue)),const SizedBox(width:12),Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text(online?'You are online':'You are offline',style:const TextStyle(fontSize:18,fontWeight:FontWeight.w900)),Text(online?'New delivery work can be assigned.':'Turn on duty status to receive nearby work.',style:const TextStyle(color:Colors.grey))]))]))),
     const SizedBox(height:16),
     StreamBuilder<QuerySnapshot<Map<String,dynamic>>>(
-      stream:FirebaseFirestore.instance.collection('orders').snapshots(),
+      stream:FirebaseFirestore.instance.collection('orders').where('carrierUid',isEqualTo:widgetUserUid).snapshots(),
       builder:(context,s){
         if(!s.hasData)return const Card(child:Padding(padding:EdgeInsets.all(24),child:Center(child:CircularProgressIndicator())));
         if(!online||position==null)return Card(child:Padding(padding:const EdgeInsets.all(24),child:Center(child:Text(online?'Waiting for live location...':'Go online to view nearby delivery requests.'))));
@@ -676,9 +867,8 @@ class DeliveryHome extends StatelessWidget{
         for(final d in s.data!.docs){
           final x=d.data();final assigned=(x['carrierUid']??x['deliveryPartnerUid']??'').toString();final status=(x['status']??'').toString().toLowerCase();
           final assignedToMe=assigned==widgetUserUid;
-          final unassigned=assigned.isEmpty;
-          final pendingAuto=assignedToMe && status=='pending_acceptance';
-          if(!unassigned && !pendingAuto)continue;
+          final pendingAuto=assignedToMe && ['pending_acceptance','assigned'].contains(status);
+          if(!pendingAuto)continue;
           final lat=n(x['customerLatitude']??x['pickupLatitude']??x['pickupLat']);final lng=n(x['customerLongitude']??x['pickupLongitude']??x['pickupLng']);
           if((assigned.isNotEmpty&&!pendingAuto)||!['new order','searching','ready','pending','pending_acceptance','assigned'].contains(status)||status=='delivered'||status=='cancelled'||status=='completed'||status=='rejected'||status=='expired'||lat==0||lng==0)continue;
           if(Geolocator.distanceBetween(position!.latitude,position!.longitude,lat,lng)<=7000)list.add(d);
@@ -842,7 +1032,8 @@ class _DeliveryMapState extends State<DeliveryMap>{
             onMapReady:(){_ready=true;if(me!=null)_focus(me,destination);},
           ),
           children:[
-            TileLayer(urlTemplate: _mapboxTilesUrl,maxZoom:19,userAgentPackageName:'com.allways.delivery'),
+            TileLayer(urlTemplate: _openStreetMapTilesUrl,maxZoom:19,userAgentPackageName:'com.allways.delivery'),
+            RichAttributionWidget(attributions: const [TextSourceAttribution('© OpenStreetMap contributors')]),
             MarkerLayer(markers:markers),
           ],
         ),
@@ -981,8 +1172,8 @@ Future<void> _chooseAllwaysLanguage(BuildContext context) async {
 
 class Profile extends StatelessWidget{
   final User user; final Future<void> Function() onSos; final bool assignmentBeep, assignmentAudio, notificationsEnabled;
-  final Future<void> Function(bool) onAssignmentBeep, onAssignmentAudio, onNotifications; final Future<void> Function({String? orderId}) onSupport;
-  const Profile({super.key,required this.user,required this.onSos,required this.assignmentBeep,required this.assignmentAudio,required this.notificationsEnabled,required this.onAssignmentBeep,required this.onAssignmentAudio,required this.onNotifications,required this.onSupport});
+  final Future<void> Function(bool) onAssignmentBeep, onAssignmentAudio, onNotifications; final Future<void> Function({String? orderId}) onSupport; final Future<void> Function() onSignOut;
+  const Profile({super.key,required this.user,required this.onSos,required this.assignmentBeep,required this.assignmentAudio,required this.notificationsEnabled,required this.onAssignmentBeep,required this.onAssignmentAudio,required this.onNotifications,required this.onSupport,required this.onSignOut});
   @override Widget build(BuildContext c)=>ListView(padding:const EdgeInsets.fromLTRB(16,18,16,28),children:[
     const Text('Profile & Safety',style:TextStyle(fontSize:24,fontWeight:FontWeight.w900)),const SizedBox(height:12),
     Card(child:ListTile(leading:const Icon(Icons.person_outline,color:blue),title:Text(user.displayName??'Delivery Partner'),subtitle:Text(user.email??''))),
@@ -993,6 +1184,7 @@ class Profile extends StatelessWidget{
     Card(child:ListTile(leading:const Icon(Icons.description_outlined),title:const Text('Documents'),subtitle:const Text('View your current vehicle and verification details.'),trailing:const Icon(Icons.chevron_right),onTap:()=>_showPartnerDocuments(c,user))),
     Card(child:ListTile(leading:const Icon(Icons.help_outline,color:blue),title:const Text('Help & Support'),subtitle:const Text('Send a delivery issue to ALLways operations.'),trailing:const Icon(Icons.chevron_right),onTap:onSupport)),
     Card(child:ListTile(leading:const Icon(Icons.sos,color:Colors.red),title:const Text('SOS / Emergency'),subtitle:const Text('Send an alert to ALLways operations.'),onTap:onSos)),
-    Card(child:ListTile(leading:const Icon(Icons.logout),title:const Text('Sign out'),onTap:()=>FirebaseAuth.instance.signOut())),
+    Card(child:ListTile(leading:const Icon(Icons.security,color:blue),title:const Text('Privacy & Account Security'),subtitle:const Text('Location privacy, data requests and grievance'),trailing:const Icon(Icons.chevron_right),onTap:()=>Navigator.push(c,MaterialPageRoute(builder:(_)=>AccountSecurityScreen(user:user,role:'delivery_partner',repository:'mauryasujeet698-svg/ALLways-Delivery-Partner',accent:blue))))),
+    Card(child:ListTile(leading:const Icon(Icons.logout),title:const Text('Sign out'),onTap:onSignOut)),
   ]);
 }
