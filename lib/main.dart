@@ -1033,7 +1033,10 @@ class _DeliveryMapState extends State<DeliveryMap>{
           ),
           children:[
             TileLayer(urlTemplate: _openStreetMapTilesUrl,maxZoom:19,userAgentPackageName:'com.allways.delivery'),
-            RichAttributionWidget(attributions: const [TextSourceAttribution('© OpenStreetMap contributors')]),
+            RichAttributionWidget(attributions: [
+              if (_openStreetMapTilesUrl.contains('mapbox.com')) const TextSourceAttribution('© Mapbox'),
+              const TextSourceAttribution('© OpenStreetMap contributors'),
+            ]),
             MarkerLayer(markers:markers),
           ],
         ),
