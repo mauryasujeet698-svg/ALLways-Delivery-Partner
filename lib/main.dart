@@ -20,9 +20,12 @@ import 'account_security_screen.dart';
 import 'shift_service.dart';
 
 const blue=Color(0xFF1565C0), bg=Color(0xFFF7F8FB);
+const _mapboxPublicToken = String.fromEnvironment('MAPBOX_PUBLIC_TOKEN');
 const _openStreetMapTilesUrl = String.fromEnvironment(
   'MAP_TILE_URL',
-  defaultValue: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+  defaultValue: _mapboxPublicToken.isNotEmpty
+      ? 'https://api.mapbox.com/styles/v1/mapbox/streets-v12/tiles/256/{z}/{x}/{y}?access_token=$_mapboxPublicToken'
+      : 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
 );
 const _allwaysNotificationChannel = MethodChannel('allways_notifications');
 @pragma('vm:entry-point')
